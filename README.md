@@ -107,4 +107,4 @@ ws plugin add --link /path/to/plugin/examples/hello
 
 ## Not here yet
 
-Things in ws's graph, palette actions, events, refs and an HTTP client. The design is `designs/24-plugins.md` in ws.
+Things in ws's graph, palette actions, events, refs and an HTTP client.

@@ -2,7 +2,7 @@
 
 How ws and a plugin talk. Version 1. The framework in this repo (`plugin`) speaks it for you; this is for ws's side, for a plugin in another language, and for settling an argument.
 
-The design it comes from is `designs/24-plugins.md` in ws. Where they differ, this is what's built.
+This is what's built: where ws and this differ, one of them has a bug.
 
 ## A plugin on disk
 
