@@ -53,6 +53,8 @@ cd plugin-notes
 ws plugin-dev watch
 ```
 
+Install it with `ws plugin add withworkspace/plugin-plugin-dev`. A new plugin comes with the workflow that publishes its releases: push a tag `v<version>`, and `ws plugin add <owner>/<repo>` installs it anywhere ([how it's published](PROTOCOL.md#a-plugin-as-its-published)).
+
 ## What's built in
 
 Declaring a thing and handling it are one call, and what ws is told the plugin adds is written from those calls.
