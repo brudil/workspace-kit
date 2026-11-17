@@ -200,7 +200,7 @@ ws proxies `GET|POST|… /plugins/<name>/<rest>` to the plugin's socket as `/<re
 - `X-Forwarded-Prefix: /plugins/<name>`
 - ws's own cookies removed
 
-The page is shown in an iframe at `/x/<name>/<rest>`, same-origin with ws. ws serves two files for it:
+The page is shown in an iframe at `/x/<name>/<rest>`, same-origin with ws. Everything after the plugin's name is the plugin's: it routes it, and says when there's nothing at a path. When ws's address moves within the plugin and the page didn't cause it, ws loads the page at the new path, unless the page routes itself (`ws:routing`, below). ws serves two files for it:
 
 - `/plugin-kit.js`: the page's side of the frame's messages, below
 - `/plugin-kit.css`: ws's look for a plugin's page
@@ -215,6 +215,8 @@ The page is shown in an iframe at `/x/<name>/<rest>`, same-origin with ws. ws se
 | `ws:hello` | ws | `scheme` (`light` or `dark`), `vars` (CSS custom properties by name) | The answer to `ws:ready`: the theme |
 | `ws:theme` | ws | as `ws:hello` | The theme changed |
 | `ws:path` | page | `path` | The page moved without loading (its own routing) |
+| `ws:routing` | page | | The page routes itself: when ws's address moves within the plugin, tell it (`ws:navigate`), don't load it again. Said again each time the page loads. |
+| `ws:navigate` | ws | `path` | ws's address moved to this path in the plugin, without the page having said so (the sidebar, back and forward, a link in ws). Sent only to a page that said `ws:routing`; any other is loaded at the path. |
 | `ws:title` | page | `title` | The page's title |
 | `ws:open` | page | `path` | Go to a page of ws's |
 | `ws:key` | page | `key`, `meta`, `ctrl`, `shift`, `alt` | A key ws owns was pressed in the frame |

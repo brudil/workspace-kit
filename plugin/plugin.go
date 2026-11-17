@@ -379,6 +379,8 @@ func (p *Plugin) configChanged(values map[string]json.RawMessage) {
 		p.guard("OnConfig", fn)
 	}
 	p.wakeSyncs()
+	// What a page shows may well follow config: open ones look again.
+	p.Changed()
 }
 
 // guard runs fn, turning a panic into a logged error.

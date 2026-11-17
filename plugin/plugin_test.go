@@ -313,7 +313,7 @@ func TestPages(t *testing.T) {
 		`<base href="/plugins/jira/">`,
 		`<title>Jira</title>`,
 		`<link rel="stylesheet" href="/plugin-kit.css">`,
-		`<script src="/plugin-kit.js" defer></script>`,
+		`<script src="/plugin-kit.js"></script>`,
 		`<h1>&lt;Hello&gt;</h1>`, // escaped, as html/template does
 		`<a href="/plugins/jira/browse/PROJ-1">one</a>`,
 		`<span class="pill pill-good">Done</span>`,

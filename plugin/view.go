@@ -268,7 +268,8 @@ func relTime(v any) string {
 }
 
 // layout wraps every page: ws's stylesheet and the page's side of the
-// frame's messages, both served by ws.
+// frame's messages, both served by ws. The script isn't deferred: it gives
+// the page ws's theme before the page first paints.
 var layout = template.Must(template.New("layout").Funcs(template.FuncMap{"reltime": relTime}).Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -277,7 +278,7 @@ var layout = template.Must(template.New("layout").Funcs(template.FuncMap{"reltim
 <base href="{{.Base}}/">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/plugin-kit.css">
-<script src="/plugin-kit.js" defer></script>
+<script src="/plugin-kit.js"></script>
 </head>
 <body class="ws-plugin">
 <main>
