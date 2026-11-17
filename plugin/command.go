@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/brudil/workspace-kit/protocol"
 )
@@ -18,6 +19,9 @@ type Command struct {
 	args  string
 	fn    func(*Call) error
 	flags []flag
+	// timeout is how long it may run, where that isn't the plugin's
+	// CommandTimeout.
+	timeout *time.Duration
 }
 
 // flag is a flag a command takes: on or off, or (takesValue) with a value.
@@ -62,6 +66,14 @@ func (c *Command) Option(name, usage string) *Command {
 // "[QUERY]".
 func (c *Command) Args(usage string) *Command {
 	c.args = usage
+	return c
+}
+
+// Timeout is how long the command may run, in place of the plugin's
+// CommandTimeout. 0 is as long as it likes: for one that runs until it's
+// stopped (Ctrl-C ends its Context).
+func (c *Command) Timeout(d time.Duration) *Command {
+	c.timeout = &d
 	return c
 }
 
@@ -199,8 +211,15 @@ func (p *Plugin) runCommand(ctx context.Context, in protocol.CommandRunParams) i
 		return 1
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, p.CommandTimeout)
-	defer cancel()
+	limit := p.CommandTimeout
+	if cmd.timeout != nil {
+		limit = *cmd.timeout
+	}
+	if limit > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limit)
+		defer cancel()
+	}
 	call.ctx = ctx
 	err = func() (err error) {
 		defer func() {
@@ -215,7 +234,7 @@ func (p *Plugin) runCommand(ctx context.Context, in protocol.CommandRunParams) i
 		return 0
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		err = fmt.Errorf("%s ran out of time (%s)", cmd.name, p.CommandTimeout)
+		err = fmt.Errorf("%s ran out of time (%s)", cmd.name, limit)
 	}
 	fmt.Fprintln(errw, err)
 	var exit *ExitError

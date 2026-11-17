@@ -579,3 +579,62 @@ func TestNothingIsDeclaredOnceRunning(t *testing.T) {
 		t.Errorf("a command declared while running: %+v", got)
 	}
 }
+
+// A command with a timeout of its own outlasts the plugin's, and one with
+// none runs until it's stopped.
+func TestCommandTimeout(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.CommandTimeout = 20 * time.Millisecond
+		wait := func(c *plugin.Call) error {
+			select {
+			case <-c.Context().Done():
+				return c.Context().Err()
+			case <-time.After(120 * time.Millisecond):
+				return c.Say("done")
+			}
+		}
+		p.Command("short", "Runs out of time", wait)
+		p.Command("long", "Has longer", wait).Timeout(time.Second)
+		p.Command("forever", "Has as long as it likes", wait).Timeout(0)
+	})
+	if got := ws.Run("short"); got.Exit != 1 || !strings.Contains(got.Stderr, "ran out of time") {
+		t.Errorf("short: exit %d, %q", got.Exit, got.Stderr)
+	}
+	for _, name := range []string{"long", "forever"} {
+		if got := ws.Run(name); got.Exit != 0 || got.Stdout != "done\n" {
+			t.Errorf("%s: exit %d, %q %q", name, got.Exit, got.Stdout, got.Stderr)
+		}
+	}
+}
+
+// p.WS runs ws's own program in the workspace, and says what went wrong.
+func TestWS(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(t.TempDir(), "ws")
+	body := "#!/bin/sh\nif [ \"$1\" = fail ]; then echo partial; echo 'no such thing' >&2; exit 3; fi\necho \"$PWD|$WS_ORIGIN_PWD|$*\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var p *plugin.Plugin
+	plugintest.New(t, nil, func(pl *plugin.Plugin) { p = pl }, plugintest.Root(root), plugintest.Executable(script))
+
+	out, err := p.WS(context.Background(), "show", "m12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, _ := filepath.EvalSymlinks(root)
+	if got := strings.TrimSpace(string(out)); got != real+"|"+root+"|show m12" && got != root+"|"+root+"|show m12" {
+		t.Errorf("ws ran as %q", got)
+	}
+	out, err = p.WS(context.Background(), "fail")
+	if err == nil || !strings.Contains(err.Error(), "no such thing") || string(out) != "partial\n" {
+		t.Errorf("a failing command: %q, %v", out, err)
+	}
+
+	// With no program to run, it says so.
+	var bare *plugin.Plugin
+	plugintest.New(t, nil, func(pl *plugin.Plugin) { bare = pl })
+	if _, err := bare.WS(context.Background(), "show"); !errors.Is(err, plugin.ErrNoWS) {
+		t.Errorf("with no ws: %v", err)
+	}
+}

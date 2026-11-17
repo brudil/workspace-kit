@@ -9,7 +9,7 @@ The design it comes from is `designs/24-plugins.md` in ws. Where they differ, th
 ```
 .ws/plugins/<name>/
   app/               the plugin's folder, or a link to one
-    plugin.toml      name, version, command
+    plugin.toml      name, version, command, build
     <the executable>
   registration.json  what it last registered (ws writes it)
   data/              the plugin's own files: plugin.db, plugin.log, view.sock
@@ -21,11 +21,14 @@ ws keeps its own files apart from the plugin's, so a folder linked in for develo
 name    = "jira"
 version = "0.3.0"
 command = ["./ws-jira"]
+build   = ["go", "build", "-o", "ws-jira", "."]
 ```
 
 `command` is run with the plugin's folder (`app/`) as its working directory.
 
-A plugin may exit on its own, with status 0, to be started afresh: one whose registration depends on config does when that config changes. ws starts it again when it's next needed.
+`build` is optional: how the plugin's built from its source, run in its folder. ws runs it for a plugin added from a folder where what `command` starts isn't there, and when it's asked to (`ws plugin add --build`).
+
+A plugin may exit on its own, with status 0, to be started afresh: one whose registration depends on config does when that config changes. ws starts it again at once.
 
 ## The connection
 
@@ -46,7 +49,7 @@ Always first, once.
 ```json
 {
   "protocol": 1,
-  "ws": { "version": "0.42.0" },
+  "ws": { "version": "0.42.0", "executable": "/usr/local/bin/workspace" },
   "plugin": {
     "name": "jira",
     "version": "0.3.0",
@@ -59,6 +62,7 @@ Always first, once.
 }
 ```
 
+- `ws.executable` is ws's own program. A plugin reaches ws by running its commands, in the workspace's root: `<executable> show m12 -f llm`. ws's commands are its interface to a plugin as they are to anything else; there are no methods a plugin calls ws by yet.
 - `config` holds what's set, secrets included, by key. A key that isn't set is absent. Values are JSON: a string, a bool, a number, or an array of strings.
 - `view.listen` is a unix socket's path. A plugin with a view listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
 - `view.base` is the path the view is served under.

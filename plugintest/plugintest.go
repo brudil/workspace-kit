@@ -69,6 +69,8 @@ type options struct {
 	name   string
 	config map[string]any
 	dir    string
+	root   string
+	ws     string
 }
 
 // Config is the config the plugin starts with, by key.
@@ -78,6 +80,15 @@ func Config(values map[string]any) Option { return func(o *options) { o.config =
 // kept when the plugin stops, so a second plugin started in it finds what
 // the first left. The default is a temporary folder of the plugin's own.
 func Dir(dir string) Option { return func(o *options) { o.dir = dir } }
+
+// Root is the workspace's folder, as the plugin's told (the default is the
+// folder the plugin runs in).
+func Root(dir string) Option { return func(o *options) { o.root = dir } }
+
+// Executable is the program the plugin's told is ws: what it runs for a
+// ws command (p.WS). A test gives it a script that answers as ws would.
+// The default is none, and p.WS fails with plugin.ErrNoWS.
+func Executable(path string) Option { return func(o *options) { o.ws = path } }
 
 // Name is the plugin's name (the default is "test").
 func Name(name string) Option { return func(o *options) { o.name = name } }
@@ -135,11 +146,15 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 		closeWS()
 		return nil, err
 	}
+	root := o.root
+	if root == "" {
+		root = dir
+	}
 	in := protocol.InitializeParams{
 		Protocol:  protocol.Version,
-		WS:        protocol.WSInfo{Version: "test"},
+		WS:        protocol.WSInfo{Version: "test", Executable: o.ws},
 		Plugin:    protocol.PluginInfo{Name: o.name, Version: "0.0.0", Dir: dir, Data: data},
-		Workspace: protocol.Workspace{Root: dir},
+		Workspace: protocol.Workspace{Root: root},
 		Config:    config,
 		// No socket: pages are fetched from the plugin's handler.
 		View: protocol.ViewInfo{Base: "/plugins/" + o.name},
@@ -201,6 +216,13 @@ type Result struct {
 // Run runs the plugin's command as "ws <plugin> args..." would, and
 // returns what it printed and its exit code.
 func (ws *WS) Run(args ...string) Result {
+	return ws.RunContext(context.Background(), args...)
+}
+
+// RunContext is Run for a command that's stopped: ctx ending is Ctrl-C.
+// What the command printed before it was stopped is returned, with an
+// exit code of -1.
+func (ws *WS) RunContext(ctx context.Context, args ...string) Result {
 	ws.mu.Lock()
 	ws.seq++
 	id := fmt.Sprintf("c%d", ws.seq)
@@ -209,7 +231,7 @@ func (ws *WS) Run(args ...string) Result {
 		args = []string{}
 	}
 	var out protocol.CommandRunResult
-	err := ws.conn.Call(context.Background(), protocol.MethodCommandRun,
+	err := ws.conn.Call(ctx, protocol.MethodCommandRun,
 		protocol.CommandRunParams{ID: id, Args: args, Dir: ws.dir, Terminal: ws.Terminal}, &out)
 	res := Result{Exit: out.Exit}
 	if err != nil {
