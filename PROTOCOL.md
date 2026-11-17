@@ -30,6 +30,27 @@ build   = ["go", "build", "-o", "ws-jira", "."]
 
 A plugin may exit on its own, with status 0, to be started afresh: one whose registration depends on config does when that config changes. ws starts it again at once.
 
+## A plugin as it's published
+
+A plugin is published as a repo on GitHub. `ws plugin add owner/repo` installs it.
+
+A release of it holds, for each platform it's built for:
+
+```
+<name>_<tag>_<os>_<arch>.tar.gz     jira_v0.3.0_darwin_arm64.tar.gz
+checksums.txt                       a line for each: "<sha256>  <file>", as sha256sum writes it
+```
+
+- `<os>` and `<arch>` are Go's: `darwin`, `linux`; `arm64`, `amd64`.
+- The archive holds `plugin.toml` and what its `command` starts, at its top. It may hold other files and folders the plugin needs. It holds no links.
+- ws installs the file whose name ends `_<os>_<arch>.tar.gz` for the machine it's on, from the latest release that isn't a prerelease, or the one tagged `owner/repo@<tag>`.
+- ws checks the file against its line in `checksums.txt` before unpacking it. Read as anyone (with no `gh` logged in), a release's files are those `checksums.txt` lists, so a release needs one.
+- The tag is `v` and `plugin.toml`'s `version`.
+
+A repo with no release, or none for the machine, is installed from its source: ws fetches it and runs `plugin.toml`'s `build`.
+
+The plugin-dev plugin gives a new plugin the workflow that publishes this on a tag.
+
 ## The connection
 
 - JSON-RPC 2.0, one message per line, over the plugin's stdin (ws to the plugin) and stdout (the plugin to ws).
