@@ -1,0 +1,6 @@
+# Built plugins
+/examples/*/ws-*
+/bin/
+*.db
+*.db-shm
+*.db-wal
