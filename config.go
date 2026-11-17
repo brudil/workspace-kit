@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // Config is a plugin's config. A key is declared with one of its methods,

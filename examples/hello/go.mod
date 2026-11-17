@@ -2,7 +2,7 @@ module example.com/ws-hello
 
 go 1.26.0
 
-require github.com/brudil/workspace-kit v0.0.0
+require github.com/withworkspace/plugin v0.0.0
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
@@ -17,4 +17,4 @@ require (
 	modernc.org/sqlite v1.62.0 // indirect
 )
 
-replace github.com/brudil/workspace-kit => ../..
+replace github.com/withworkspace/plugin => ../..

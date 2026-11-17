@@ -14,9 +14,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/brudil/workspace-kit/plugin"
-	"github.com/brudil/workspace-kit/plugintest"
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin"
+	"github.com/withworkspace/plugin/plugintest"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }

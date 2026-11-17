@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // syncer is one sync: what it does, how often, and how it last went.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // logHandler writes the plugin's log to stderr (which ws keeps as the
