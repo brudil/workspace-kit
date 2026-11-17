@@ -1,3 +1,4 @@
 name    = "hello"
 version = "0.1.0"
 command = ["./ws-hello"]
+build   = ["go", "build", "-o", "ws-hello", "."]

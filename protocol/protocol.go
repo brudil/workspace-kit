@@ -51,6 +51,9 @@ type InitializeParams struct {
 // WSInfo is the ws on the other end.
 type WSInfo struct {
 	Version string `json:"version"`
+	// Executable is ws's own program, for a plugin that runs ws's
+	// commands. A ws from before it said doesn't.
+	Executable string `json:"executable,omitempty"`
 }
 
 // PluginInfo is the plugin as ws knows it: its plugin.toml, and its folders.

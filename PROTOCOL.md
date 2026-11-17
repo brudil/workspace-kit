@@ -46,7 +46,7 @@ Always first, once.
 ```json
 {
   "protocol": 1,
-  "ws": { "version": "0.42.0" },
+  "ws": { "version": "0.42.0", "executable": "/usr/local/bin/workspace" },
   "plugin": {
     "name": "jira",
     "version": "0.3.0",
@@ -59,6 +59,7 @@ Always first, once.
 }
 ```
 
+- `ws.executable` is ws's own program. A plugin reaches ws by running its commands, in the workspace's root: `<executable> show m12 -f llm`. ws's commands are its interface to a plugin as they are to anything else; there are no methods a plugin calls ws by yet.
 - `config` holds what's set, secrets included, by key. A key that isn't set is absent. Values are JSON: a string, a bool, a number, or an array of strings.
 - `view.listen` is a unix socket's path. A plugin with a view listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
 - `view.base` is the path the view is served under.

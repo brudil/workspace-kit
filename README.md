@@ -37,6 +37,22 @@ func main() {
 
 That's a plugin with a page in ws's web UI, a `ws hello say` command, a setting, and a guide that tells agents it's there. [examples/hello](examples/hello) is the whole of it, with a table of its own and a test.
 
+## Starting one
+
+The [plugin-dev](https://github.com/withworkspace/plugin-plugin-dev) plugin writes a new plugin that works as it's written, and builds and runs it in a workspace on every save. It's a plugin itself, written with this:
+
+```bash
+ws plugin-dev new notes
+```
+
+```bash
+cd plugin-notes
+```
+
+```bash
+ws plugin-dev watch
+```
+
 ## What's built in
 
 Declaring a thing and handling it are one call, and what ws is told the plugin adds is written from those calls.
@@ -51,13 +67,15 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `agents.md` | What agents are told of the plugin. |
 | `p.Setup`, `p.OnConfig` | Declaring what depends on config, and hearing of a change. |
 | `p.Log`, `p.Changed`, `p.Badge` | A log, telling open pages to reload, the count in the sidebar. |
+| `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. It's how a plugin reaches ws. |
+| `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
 | `plugintest` | Runs the plugin inside a test, against a stand-in for ws. |
 
 ## A plugin's folder
 
 ```
-ws-hello/
-  plugin.toml          name, version, command
+plugin-hello/
+  plugin.toml          name, version, command, and how it's built
   main.go
   agents.md            the guide for agents
   migrations/
@@ -85,4 +103,4 @@ ws plugin add --link /path/to/workspace-kit/examples/hello
 
 ## Not here yet
 
-Things in ws's graph, palette actions, events, refs, an HTTP client, and a client for ws itself. The design is `designs/24-plugins.md` in ws.
+Things in ws's graph, palette actions, events, refs and an HTTP client. The design is `designs/24-plugins.md` in ws.
