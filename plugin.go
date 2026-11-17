@@ -40,8 +40,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brudil/workspace-kit/internal/rpc"
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/internal/rpc"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // Plugin is a plugin: what it declares before Run, and what it's running

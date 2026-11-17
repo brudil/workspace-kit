@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // message is any JSON-RPC message: a request (ID and Method), a

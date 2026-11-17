@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // pair is two connections joined end to end.

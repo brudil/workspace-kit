@@ -1,6 +1,8 @@
-# workspace-kit
+# plugin
 
-The framework for writing ws plugins in Go.
+The framework for writing ws plugins in Go: `github.com/withworkspace/plugin`.
+
+This repo is the framework, not a plugin. Plugins are the repos beside it named `plugin-<name>`.
 
 A plugin is one executable. ws's daemon starts it, and speaks to it over its stdin and stdout ([PROTOCOL.md](PROTOCOL.md)). This package speaks for it, so a plugin is what it declares:
 
@@ -10,7 +12,7 @@ package main
 import (
 	"embed"
 
-	"github.com/brudil/workspace-kit/plugin"
+	"github.com/withworkspace/plugin"
 )
 
 //go:embed agents.md migrations views
@@ -100,7 +102,7 @@ cd examples/hello && ./ws-hello --registration
 prints what the plugin would tell ws it adds. In a workspace:
 
 ```bash
-ws plugin add --link /path/to/workspace-kit/examples/hello
+ws plugin add --link /path/to/plugin/examples/hello
 ```
 
 ## Not here yet

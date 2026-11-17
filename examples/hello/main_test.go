@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brudil/workspace-kit/plugintest"
+	"github.com/withworkspace/plugin/plugintest"
 )
 
 func TestHello(t *testing.T) {

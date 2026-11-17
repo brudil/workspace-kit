@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // Command is one thing the plugin's command does: ws <plugin> <name>.

@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brudil/workspace-kit/internal/rpc"
-	"github.com/brudil/workspace-kit/plugin"
-	"github.com/brudil/workspace-kit/protocol"
+	"github.com/withworkspace/plugin"
+	"github.com/withworkspace/plugin/internal/rpc"
+	"github.com/withworkspace/plugin/protocol"
 )
 
 // WS is the stand-in for ws that a plugin under test is running against.

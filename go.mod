@@ -1,4 +1,4 @@
-module github.com/brudil/workspace-kit
+module github.com/withworkspace/plugin
 
 go 1.26.0
 
