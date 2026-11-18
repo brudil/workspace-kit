@@ -21,6 +21,7 @@ import (
 	"github.com/withworkspace/plugin"
 	"github.com/withworkspace/plugin/plugintest"
 	"github.com/withworkspace/plugin/protocol"
+	"github.com/withworkspace/plugin/ui"
 )
 
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
@@ -58,9 +59,13 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		p.View("Board", plugin.At("/board"))
 		p.Command("mine", "Issues assigned to you", func(*plugin.Call) error { return nil }).Args("[PROJECT]")
 		p.Sync("issues", 5*time.Minute, func(context.Context) error { return nil })
-		p.Ref("issue", "Jira issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).
-			Prefix("RAM-", "RAP-").Address("https://acme.atlassian.net/browse/{ref}").Opens("/issue/{ref}").Icon("ticket")
-		p.Ref("sprint", "", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).Prefix("SPRINT-")
+		p.Ref("issue", "Jira issue").
+			Prefix("RAM-", "RAP-").Address("https://acme.atlassian.net/browse/{ref}").Opens("/issue/{ref}").Icon("ticket").
+			Fields(plugin.Title("title"), plugin.State("status", "Status"), plugin.Text("assignee", "Assignee"), plugin.Time("updated"), plugin.Markdown("body")).
+			Search(plugin.All("title"), plugin.All(ui.Key), plugin.Upto("body", 10000)).
+			Card(ui.Title("title"), ui.Subtitle(ui.Key), ui.Badge("status")).
+			Pane(ui.Title("title"), ui.Badge("status"), ui.Field("assignee").Label("Who"), ui.Markdown("body").Lines(12))
+		p.Ref("sprint", "").Prefix("SPRINT-")
 		p.Guide("", "crew", "orchestrator")
 	}, plugintest.Name("jira"), plugintest.Config(map[string]any{"site": "https://x", "token": "t"}))
 
@@ -74,7 +79,13 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		`"agent":{"roles":["crew","orchestrator"],"guide":"Use ` + "`ws jira mine`" + `.\n"},` +
 		`"syncs":[{"name":"issues","every":300}],` +
 		`"refs":[{"kind":"issue","title":"Jira issue","icon":"ticket","prefixes":["RAM-","RAP-"],` +
-		`"address":"https://acme.atlassian.net/browse/{ref}","path":"/issue/{ref}"},` +
+		`"address":"https://acme.atlassian.net/browse/{ref}","path":"/issue/{ref}",` +
+		`"fields":[{"name":"title","type":"title"},{"name":"status","type":"state","label":"Status"},` +
+		`{"name":"assignee","type":"text","label":"Assignee"},{"name":"updated","type":"time"},{"name":"body","type":"markdown"}],` +
+		`"search":[{"field":"title"},{"field":"key"},{"field":"body","max":10000}],` +
+		`"views":{"card":[{"block":"title","field":"title"},{"block":"subtitle","field":"key"},{"block":"badge","field":"status"}],` +
+		`"pane":[{"block":"title","field":"title"},{"block":"badge","field":"status"},` +
+		`{"block":"field","field":"assignee","label":"Who"},{"block":"markdown","field":"body","lines":12}]}},` +
 		`{"kind":"sprint","prefixes":["SPRINT-"]}],` +
 		`"config_version":2,` +
 		`"config":[` +
@@ -91,7 +102,6 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 	built := fstest.MapFS{"ui/dist/app.js": file(appJS)}
 	ok := func(http.ResponseWriter, *http.Request) {}
-	shows := func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }
 	for name, tc := range map[string]struct {
 		files fstest.MapFS
 		setup func(p *plugin.Plugin)
@@ -133,32 +143,62 @@ func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 		},
 		"a ref declared twice": {
 			setup: func(p *plugin.Plugin) {
-				p.Ref("issue", "", shows).Prefix("RAM-")
-				p.Ref("issue", "", shows).Prefix("RAP-")
+				p.Ref("issue", "").Prefix("RAM-")
+				p.Ref("issue", "").Prefix("RAP-")
 			},
 			why: "declared twice",
 		},
 		"a ref that names nothing": {
-			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows) },
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "") },
 			why:   "it has no prefixes",
 		},
 		"a ref whose prefix is ws's own kind of name": {
-			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows).Prefix("demo#") },
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("demo#") },
 			why:   `its prefix "demo#"`,
-		},
-		"a ref with nothing to show one": {
-			setup: func(p *plugin.Plugin) { p.Ref("issue", "", nil).Prefix("RAM-") },
-			why:   "nothing to show one",
 		},
 		"a ref whose address has nowhere for the name": {
 			setup: func(p *plugin.Plugin) {
-				p.Ref("issue", "", shows).Prefix("RAM-").Address("https://acme.atlassian.net/browse/")
+				p.Ref("issue", "").Prefix("RAM-").Address("https://acme.atlassian.net/browse/")
 			},
 			why: "its address",
 		},
 		"a ref that opens at a path that isn't one": {
-			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows).Prefix("RAM-").Opens("issue/{ref}") },
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("RAM-").Opens("issue/{ref}") },
 			why:   "its path",
+		},
+		"a ref whose things have nothing they're called": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Text("summary")) },
+			why:   "0 fields of type title",
+		},
+		"a ref with two titles": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("summary"), plugin.Title("name"))
+			},
+			why: "2 fields of type title",
+		},
+		"a ref with a field twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title"), plugin.Text("title"))
+			},
+			why: `its field "title" is there twice`,
+		},
+		"a ref that takes the key for a field": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title"), plugin.Text(ui.Key))
+			},
+			why: `its field "key" is every thing's own`,
+		},
+		"a ref found by a field it hasn't": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title")).Search(plugin.All("body"))
+			},
+			why: `it's found by "body"`,
+		},
+		"a ref whose view shows a field it hasn't": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title")).Card(ui.Title("title"), ui.Badge("status"))
+			},
+			why: `its view card shows "status"`,
 		},
 		"a config key declared twice": {
 			setup: func(p *plugin.Plugin) {
@@ -804,30 +844,40 @@ func TestAskingWS(t *testing.T) {
 
 // --- refs ---
 
+// issues is a kind of thing as a plugin declares one: named RAM-n, made
+// of a title, a status, an assignee and a body.
+func issues(p *plugin.Plugin) *plugin.Ref {
+	return p.Ref("issue", "Jira issue").Prefix("RAM-").
+		Fields(plugin.Title("title"), plugin.State("status"), plugin.Text("assignee", "Assignee"), plugin.Markdown("body"))
+}
+
 func TestWSAsksWhatANameIs(t *testing.T) {
+	when := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
 	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
-		p.Ref("issue", "Jira issue", func(_ context.Context, a plugin.Asked) (plugin.Shown, error) {
+		issues(p).Show(func(_ context.Context, a plugin.Asked) (plugin.Thing, error) {
 			switch a.Name {
 			case "RAM-1":
-				md := "The clock should be injected."
+				body := "The clock should be injected."
 				if a.Full {
-					md += "\n\n## Comments\n\nDana: agreed."
+					body += "\n\n## Comments\n\nDana: agreed."
 				}
-				return plugin.Shown{Title: "Token refresh is flaky", State: "In Progress", Fields: []plugin.Field{{"Assignee", "Dana"}}, Markdown: md}, nil
+				return plugin.Thing{Name: a.Name, Changed: when, Fields: map[string]string{"title": "Token refresh is flaky", "status": "In Progress", "assignee": "Dana", "body": body}}, nil
 			case "RAM-2":
 				panic("the issue's gone wrong")
 			}
-			return plugin.Shown{}, plugin.ErrNotFound
-		}).Prefix("RAM-")
+			return plugin.Thing{}, plugin.ErrNotFound
+		})
+		// A kind that says no more than it's told ws.
+		p.Ref("sprint", "Sprint").Prefix("SPRINT-").Fields(plugin.Title("name"))
 	})
 
 	got, err := ws.Show("issue", "RAM-1", false)
-	want := protocol.RefShowResult{Title: "Token refresh is flaky", State: "In Progress", Fields: []protocol.RefField{{Label: "Assignee", Value: "Dana"}}, Markdown: "The clock should be injected."}
-	if err != nil || fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("RAM-1: %+v, %v; want %+v", got, err, want)
+	want := map[string]string{"title": "Token refresh is flaky", "status": "In Progress", "assignee": "Dana", "body": "The clock should be injected."}
+	if err != nil || fmt.Sprint(got.Fields) != fmt.Sprint(want) || !got.Changed.Equal(when) {
+		t.Errorf("RAM-1: %+v, %v; want %v", got, err, want)
 	}
 	// Everything, when everything's asked for.
-	if got, err := ws.Show("issue", "RAM-1", true); err != nil || !strings.Contains(got.Markdown, "Dana: agreed.") {
+	if got, err := ws.Show("issue", "RAM-1", true); err != nil || !strings.Contains(got.Fields["body"], "Dana: agreed.") {
 		t.Errorf("RAM-1 in full: %+v, %v", got, err)
 	}
 	// A name the plugin has nothing by is said to be, not failed on.
@@ -838,8 +888,13 @@ func TestWSAsksWhatANameIs(t *testing.T) {
 	if _, err := ws.Show("issue", "RAM-2", false); err == nil || !strings.Contains(err.Error(), "gone wrong") {
 		t.Errorf("RAM-2: %v, want what went wrong", err)
 	}
-	if _, err := ws.Show("sprint", "SPRINT-1", false); err == nil || !strings.Contains(err.Error(), `no ref called "sprint"`) {
+	if _, err := ws.Show("epic", "EPIC-1", false); err == nil || !strings.Contains(err.Error(), `no ref called "epic"`) {
 		t.Errorf("a kind that isn't registered: %v", err)
+	}
+	// A kind with nothing to show one answers as if it couldn't be
+	// asked: ws shows what it was told.
+	if _, err := ws.Show("sprint", "SPRINT-1", false); err == nil || !strings.Contains(err.Error(), protocol.MethodRefShow) {
+		t.Errorf("a kind with no Show: %v", err)
 	}
 	if _, err := ws.Show("issue", "RAM-1", false); err != nil {
 		t.Errorf("after all that: %v", err)
@@ -852,7 +907,7 @@ func TestRefsFollowConfig(t *testing.T) {
 	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
 		projects := p.Config.List("projects", "Projects")
 		p.Setup(func() {
-			r := p.Ref("issue", "Issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil })
+			r := p.Ref("issue", "Issue")
 			for _, key := range projects.Get() {
 				r.Prefix(key + "-")
 			}
@@ -868,38 +923,41 @@ func TestRefsFollowConfig(t *testing.T) {
 // a kind at once (what's gone is forgotten), or some.
 func TestAPluginTellsWSOfItsThings(t *testing.T) {
 	var issue *plugin.Ref
-	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
-		issue = p.Ref("issue", "Jira issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).Prefix("RAM-")
-	})
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) { issue = issues(p) })
 	ctx := context.Background()
 	names := func() string {
 		var out []string
 		for _, th := range ws.Things("issue") {
-			out = append(out, th.Ref+"="+th.Title)
+			out = append(out, th.Ref+"="+th.Fields["title"])
 		}
 		return strings.Join(out, " ")
 	}
+	titled := func(name, title string) plugin.Thing {
+		return plugin.Thing{Name: name, Fields: map[string]string{"title": title}}
+	}
 	when := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
 
-	if err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-1", Title: "One", State: "Open", Changed: when, Text: "The first."}, {Name: "RAM-2", Title: "Two"}}); err != nil {
+	one := plugin.Thing{Name: "RAM-1", Changed: when, Fields: map[string]string{"title": "One", "status": "Open", "body": "The first.", "colour": "not one of its fields"}}
+	if err := issue.Mirror(ctx, []plugin.Thing{one, titled("RAM-2", "Two")}); err != nil {
 		t.Fatal(err)
 	}
 	if got := names(); got != "RAM-1=One RAM-2=Two" {
 		t.Errorf("mirrored: %s", got)
 	}
-	if th := ws.Things("issue")[0]; th.Kind != "issue" || th.State != "Open" || !th.Changed.Equal(when) || th.Text != "The first." {
+	// As ws has it: what its kind has no field for isn't kept.
+	if th := ws.Things("issue")[0]; th.Kind != "issue" || !th.Changed.Equal(when) || fmt.Sprint(th.Fields) != fmt.Sprint(map[string]string{"title": "One", "status": "Open", "body": "The first."}) {
 		t.Errorf("RAM-1 as ws has it: %+v", th)
 	}
 	// All of them again: what's changed is put in place, and what's gone
 	// is forgotten.
-	if err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-2", Title: "Two, renamed"}, {Name: "RAM-3", Title: "Three"}}); err != nil {
+	if err := issue.Mirror(ctx, []plugin.Thing{titled("RAM-2", "Two, renamed"), titled("RAM-3", "Three")}); err != nil {
 		t.Fatal(err)
 	}
 	if got := names(); got != "RAM-2=Two, renamed RAM-3=Three" {
 		t.Errorf("mirrored again: %s", got)
 	}
 	// Some: the rest stay.
-	if err := issue.Put(ctx, plugin.Thing{Name: "RAM-4", Title: "Four"}); err != nil {
+	if err := issue.Put(ctx, titled("RAM-4", "Four")); err != nil {
 		t.Fatal(err)
 	}
 	if err := issue.Remove(ctx, "RAM-2", "RAM-9"); err != nil {
@@ -909,9 +967,9 @@ func TestAPluginTellsWSOfItsThings(t *testing.T) {
 		t.Errorf("after a put and a remove: %s", got)
 	}
 	// What ws won't keep is said, and the rest is kept.
-	err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-3", Title: "Three"}, {Name: "ram-5", Title: "Five"}, {Name: "RAM-6"}})
+	err := issue.Mirror(ctx, []plugin.Thing{titled("RAM-3", "Three"), titled("ram-5", "Five"), {Name: "RAM-6", Fields: map[string]string{"status": "Open"}}})
 	var refused *plugin.Refused
-	if !errors.As(err, &refused) || len(refused.Things) != 2 || !strings.Contains(err.Error(), "ram-5: it isn't one of issue's names") || !strings.Contains(err.Error(), "RAM-6: it has no title") {
+	if !errors.As(err, &refused) || len(refused.Things) != 2 || !strings.Contains(err.Error(), "ram-5: it isn't one of issue's names") || !strings.Contains(err.Error(), "RAM-6: it has nothing for title, its title") {
 		t.Errorf("refused: %v", err)
 	}
 	if got := names(); got != "RAM-3=Three" {
@@ -920,7 +978,7 @@ func TestAPluginTellsWSOfItsThings(t *testing.T) {
 	// More than ws takes at once goes in turn.
 	many := make([]plugin.Thing, protocol.ThingsAtOnce+7)
 	for i := range many {
-		many[i] = plugin.Thing{Name: fmt.Sprintf("RAM-%d", i+1), Title: "One of many"}
+		many[i] = titled(fmt.Sprintf("RAM-%d", i+1), "One of many")
 	}
 	if err := issue.Mirror(ctx, many); err != nil || len(ws.Things("issue")) != len(many) {
 		t.Errorf("many: %d kept, %v", len(ws.Things("issue")), err)

@@ -306,7 +306,7 @@ func (ws *WS) Repos(repos ...protocol.Repo) {
 
 // keepThings answers what the plugin tells ws of its things, as ws does:
 // a thing is kept when its kind is one the plugin registered, its name
-// one of that kind's, and it has a title.
+// one of that kind's, and it has something for its kind's title.
 func (ws *WS) keepThings(method string, params json.RawMessage) (any, error) {
 	<-ws.started // what it registered is what its things are named by
 	kind := func(k string) (protocol.Ref, bool) {
@@ -331,18 +331,29 @@ func (ws *WS) keepThings(method string, params json.RawMessage) (any, error) {
 		out := protocol.ThingPutResult{}
 		for _, t := range in.Things {
 			why := ""
-			switch r, ok := kind(t.Kind); {
+			r, ok := kind(t.Kind)
+			switch {
 			case !ok:
 				why = "the plugin registered no ref called " + t.Kind
 			case !r.Names(t.Ref):
 				why = "it isn't one of " + t.Kind + "'s names"
-			case strings.TrimSpace(t.Title) == "":
-				why = "it has no title"
+			case r.Typed(protocol.FieldTitle) == "":
+				why = t.Kind + " has no title field: there's nothing to call one by"
+			case strings.TrimSpace(t.Fields[r.Typed(protocol.FieldTitle)]) == "":
+				why = "it has nothing for " + r.Typed(protocol.FieldTitle) + ", its title"
 			}
 			if why != "" {
 				out.Refused = append(out.Refused, protocol.ThingRefused{Kind: t.Kind, Ref: t.Ref, Why: why})
 				continue
 			}
+			// What its kind has no field for isn't kept.
+			kept := map[string]string{}
+			for name, value := range t.Fields {
+				if _, ok := r.Named(name); ok {
+					kept[name] = value
+				}
+			}
+			t.Fields = kept
 			ws.things[t.Kind+"\x00"+t.Ref] = t
 		}
 		return out, nil

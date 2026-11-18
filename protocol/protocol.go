@@ -233,6 +233,96 @@ type Ref struct {
 	// Path is where one opens in the plugin's app, with RefPlaceholder
 	// where its name goes: /issue/{ref}.
 	Path string `json:"path,omitempty"`
+	// Fields are what one of its things is made of: what the plugin
+	// tells ws of a thing (thing/put, ref/show) is a value for each. One
+	// of them, of type FieldTitle, is what a thing's called: a kind with
+	// none has names, and nothing ws keeps or draws.
+	Fields []Field `json:"fields,omitempty"`
+	// Search is what a thing is found by, in order: which fields, and
+	// how much of each. None: every field, as far as ws keeps of it.
+	Search []Searched `json:"search,omitempty"`
+	// Views are how one is drawn, by where: ViewCard, under its name,
+	// and ViewPane, beside the list in Find. Each is blocks, in order.
+	// With none for somewhere, ws draws one from the fields' types. A
+	// view for somewhere ws doesn't know is ignored.
+	Views map[string][]Block `json:"views,omitempty"`
+}
+
+// Field is one of the things a kind's things are made of: its name, in
+// lower-case letters, digits and underscores, what it is, and what it's
+// called where it's drawn with a label.
+type Field struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Label string `json:"label,omitempty"`
+}
+
+// FieldKey is the field every thing has without its kind saying so: its
+// name (RAM-123). A view's block and what's searched may name it.
+const FieldKey = "key"
+
+// The types of a field. One a ws doesn't know is drawn as text.
+const (
+	FieldTitle    = "title"    // what the thing's called: a line. A kind has one.
+	FieldState    = "state"    // where it stands, in the plugin's words: at most one
+	FieldText     = "text"     // words: a name, a number, a few of them
+	FieldTime     = "time"     // a moment, RFC 3339
+	FieldMarkdown = "markdown" // what it says, at length
+)
+
+// Searched is a field a thing is found by, and how much of it: Max bytes,
+// or all ws keeps of it (0).
+type Searched struct {
+	Field string `json:"field"`
+	Max   int    `json:"max,omitempty"`
+}
+
+// Where a kind's things are drawn from a view of the plugin's.
+const (
+	ViewCard = "card" // under a thing's name, on hover
+	ViewPane = "pane" // beside the list in Find, for the row the cursor's on
+)
+
+// Block is one piece of a view: what it is, and the field it shows. A
+// block whose field a thing has nothing for isn't drawn, and neither is
+// one of a kind a ws doesn't know.
+type Block struct {
+	Block string `json:"block"`
+	Field string `json:"field"`
+	// Label is what a BlockField says before its value, where that isn't
+	// the field's own.
+	Label string `json:"label,omitempty"`
+	// Lines is how many lines of a BlockMarkdown are drawn: 0 for all.
+	Lines int `json:"lines,omitempty"`
+}
+
+// The kinds of block.
+const (
+	BlockTitle    = "title"    // the line it's known by
+	BlockSubtitle = "subtitle" // a quiet line under it
+	BlockBadge    = "badge"    // a word or two, set apart: where it stands
+	BlockField    = "field"    // a label and a value
+	BlockMarkdown = "markdown" // markdown, drawn as ws draws it
+)
+
+// Named is the field of that name, if the kind has it.
+func (r Ref) Named(name string) (Field, bool) {
+	for _, f := range r.Fields {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return Field{}, false
+}
+
+// Typed is the name of the kind's first field of a type: "" for none.
+func (r Ref) Typed(fieldType string) string {
+	for _, f := range r.Fields {
+		if f.Type == fieldType {
+			return f.Name
+		}
+	}
+	return ""
 }
 
 // RefPlaceholder is where a thing's name goes in a Ref's Address and Path.
@@ -248,6 +338,7 @@ const (
 var (
 	refKind   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	refPrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,30}-$`)
+	refField  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
 )
 
 var tailNumber = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
@@ -293,6 +384,46 @@ func (r Ref) Problem() string {
 	if r.Path != "" && (!strings.HasPrefix(r.Path, "/") || strings.HasPrefix(r.Path, "//") || strings.Count(r.Path, RefPlaceholder) != 1) {
 		return fmt.Sprintf("its path %q must be a path in the plugin's app (/issue/%s) with %s once", r.Path, RefPlaceholder, RefPlaceholder)
 	}
+	// What its things are made of, found by and drawn from.
+	has := map[string]bool{FieldKey: true}
+	titles, states := 0, 0
+	for _, f := range r.Fields {
+		switch {
+		case f.Name == FieldKey:
+			return fmt.Sprintf("its field %q is every thing's own: its name", FieldKey)
+		case !refField.MatchString(f.Name):
+			return fmt.Sprintf("its field %q must be lower-case letters, digits and underscores, starting with a letter", f.Name)
+		case has[f.Name]:
+			return fmt.Sprintf("its field %q is there twice", f.Name)
+		}
+		has[f.Name] = true
+		switch f.Type {
+		case FieldTitle:
+			titles++
+		case FieldState:
+			states++
+		case "":
+			return fmt.Sprintf("its field %q has no type", f.Name)
+		}
+	}
+	switch {
+	case len(r.Fields) > 0 && titles != 1:
+		return fmt.Sprintf("it has %d fields of type %s: a thing has one thing it's called", titles, FieldTitle)
+	case states > 1:
+		return fmt.Sprintf("it has %d fields of type %s: a thing stands in one place", states, FieldState)
+	}
+	for _, s := range r.Search {
+		if !has[s.Field] || s.Max < 0 {
+			return fmt.Sprintf("it's found by %q, which isn't one of its fields", s.Field)
+		}
+	}
+	for where, blocks := range r.Views {
+		for _, b := range blocks {
+			if !has[b.Field] {
+				return fmt.Sprintf("its view %s shows %q, which isn't one of its fields", where, b.Field)
+			}
+		}
+	}
 	return ""
 }
 
@@ -305,26 +436,15 @@ type RefShowParams struct {
 	Full bool   `json:"full,omitempty"`
 }
 
-// RefShowResult is a thing as ws shows it: in a card under its name, and
-// as ws show prints it for a person or an agent. One the plugin has
-// nothing by that name for is answered CodeNotFound.
+// RefShowResult is a thing as the plugin has it now: a value for each of
+// its kind's fields, as a Thing has them. ws shows it as it shows one
+// it's been told of: by the kind's views in the web UI, and by its
+// fields' types in ws show, where what's markdown is said to be from
+// outside the workspace. One the plugin has nothing by that name for is
+// answered CodeNotFound.
 type RefShowResult struct {
-	Title string `json:"title"`
-	// State is where it stands, in the plugin's words: In Progress.
-	State string `json:"state,omitempty"`
-	// Fields are a few things worth saying of it in a line each: who has
-	// it, how pressing it is.
-	Fields []RefField `json:"fields,omitempty"`
-	// Markdown is what it says, for ws show: its description, what's
-	// been said on it. ws says where it came from before it: it's read
-	// as information, not as instructions.
-	Markdown string `json:"markdown,omitempty"`
-}
-
-// RefField is one thing said of a thing: Assignee, Dana.
-type RefField struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Changed time.Time         `json:"changed,omitzero"`
+	Fields  map[string]string `json:"fields"`
 }
 
 // The types of a config key.
@@ -445,26 +565,23 @@ const (
 // whole (CodeInvalidParams), so a plugin with more sends them in turn.
 const ThingsAtOnce = 500
 
-// Thing is one of the plugin's things, as ws keeps it: found by what it
-// says (ws find, the web UI's Find) and drawn without asking the plugin.
-// What it is in full, the plugin still says when it's shown (ref/show).
+// Thing is one of the plugin's things, as ws keeps it: found by what its
+// kind says it's found by (ws find, the web UI's Find) and drawn from its
+// kind's views, without asking the plugin.
 type Thing struct {
 	// Kind is the Ref it's named by, and Ref its name: one of that
 	// kind's, as the plugin registered them. ws keeps no thing it
 	// couldn't name.
 	Kind string `json:"kind"`
 	Ref  string `json:"ref"`
-	// Title is what it's called. A thing with none isn't kept.
-	Title string `json:"title"`
-	// State is where it stands, in the plugin's words: In Progress.
-	State string `json:"state,omitempty"`
 	// Changed is when it last changed, where the plugin knows: of two
 	// found alike, the newer is first.
 	Changed time.Time `json:"changed,omitzero"`
-	// Text is what it says, as markdown or plain words, to be found by:
-	// its description, what's been said on it. ws keeps the start of a
-	// long one.
-	Text string `json:"text,omitempty"`
+	// Fields are its values, by its kind's fields' names, each a string
+	// (a time as RFC 3339). One its kind hasn't is dropped, and ws keeps
+	// the start of a long one. A thing with nothing for its kind's title
+	// isn't kept.
+	Fields map[string]string `json:"fields"`
 }
 
 // ThingPutParams are things to keep: each added, or put in place of what
@@ -479,7 +596,8 @@ type ThingPutResult struct {
 }
 
 // ThingRefused is a thing ws didn't keep: its name isn't one of that
-// kind's, it has no title, or ws has something of its own by that name.
+// kind's, it has nothing for its kind's title, or ws has something of its
+// own by that name.
 type ThingRefused struct {
 	Kind string `json:"kind"`
 	Ref  string `json:"ref"`

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/withworkspace/plugin"
+	"github.com/withworkspace/plugin/ui"
 )
 
 // ui/dist is the app as built, from ui/. It's committed, so Go alone
@@ -62,41 +63,46 @@ func setup(p *plugin.Plugin) {
 	p.HandleFunc("GET /api/hello", hello)
 
 	// VISIT-3 is the third look at the app. ws finds a name like it
-	// wherever it's written (a brief, a conversation), and asks here what
-	// one is: for ws show VISIT-3, and the card under the name.
-	visit := p.Ref("visit", "Visit", func(ctx context.Context, a plugin.Asked) (plugin.Shown, error) {
-		n, _ := strconv.Atoi(strings.TrimPrefix(a.Name, "VISIT-"))
-		var at int64
-		err := p.DB().QueryRowContext(ctx, `select at from visits order by rowid limit 1 offset ?`, n-1).Scan(&at)
-		if errors.Is(err, sql.ErrNoRows) {
-			return plugin.Shown{}, plugin.ErrNotFound
-		}
-		if err != nil {
-			return plugin.Shown{}, err
-		}
-		when := time.Unix(at, 0).UTC().Format("2 January 2006 at 15:04 UTC")
-		return plugin.Shown{
-			Title:    "Visit " + strconv.Itoa(n),
-			Fields:   []plugin.Field{{Label: "When", Value: when}},
-			Markdown: "The app was looked at on " + when + ", and said: " + greeting.Get() + ".",
-		}, nil
-	}).Prefix("VISIT-")
+	// wherever it's written (a brief, a conversation). What one is made
+	// of, and how it's drawn under its name and beside the list in Find,
+	// is said here, as data: ws draws it.
+	visited := func(n int, at time.Time) plugin.Thing {
+		return plugin.Thing{Name: "VISIT-" + strconv.Itoa(n), Changed: at, Fields: map[string]string{
+			"title": "Visit " + strconv.Itoa(n),
+			"at":    plugin.Stamp(at),
+			"said":  "The app was looked at on " + at.UTC().Format("2 January 2006") + ", and said: **" + greeting.Get() + "**.",
+		}}
+	}
+	visit := p.Ref("visit", "Visit").Prefix("VISIT-").
+		Fields(plugin.Title("title"), plugin.Time("at", "When"), plugin.Markdown("said")).
+		Card(ui.Title("title"), ui.Subtitle(ui.Key), ui.Field("at")).
+		Pane(ui.Title("title"), ui.Subtitle(ui.Key), ui.Field("at"), ui.Markdown("said")).
+		// One visit, as it is now: for one ws wasn't told of, and for
+		// ws show VISIT-3.
+		Show(func(ctx context.Context, a plugin.Asked) (plugin.Thing, error) {
+			n, _ := strconv.Atoi(strings.TrimPrefix(a.Name, "VISIT-"))
+			var at int64
+			err := p.DB().QueryRowContext(ctx, `select at from visits order by rowid limit 1 offset ?`, n-1).Scan(&at)
+			if errors.Is(err, sql.ErrNoRows) {
+				return plugin.Thing{}, plugin.ErrNotFound
+			}
+			if err != nil {
+				return plugin.Thing{}, err
+			}
+			return visited(n, time.Unix(at, 0)), nil
+		})
 
 	// Each look at the app is counted: it posts here as it loads. ws is
 	// told of the visit, so it's found there by what it says (Find, ws
-	// find) without the plugin being asked. A plugin with more to tell
-	// does it from its sync, all at once: visit.Mirror.
+	// find) and drawn without the plugin being asked. A plugin with more
+	// to tell does it from its sync, all at once: visit.Mirror.
 	p.HandleFunc("POST /api/visits", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := p.DB().ExecContext(r.Context(), `insert into visits values (unixepoch())`); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if n, err := visits(r.Context()); err == nil {
-			now := time.Now()
-			err := visit.Put(r.Context(), plugin.Thing{
-				Name: "VISIT-" + strconv.Itoa(n), Title: "Visit " + strconv.Itoa(n), Changed: now,
-				Text: "The app was looked at on " + now.UTC().Format("2 January 2006") + ".",
-			})
+			err := visit.Put(r.Context(), visited(n, time.Now()))
 			if err != nil && !errors.Is(err, plugin.ErrUnsupported) { // an older ws finds none of them
 				p.Log.Warn("telling ws of a visit: " + err.Error())
 			}

@@ -140,7 +140,21 @@ Every field is optional.
   "refs": [
     { "kind": "issue", "title": "Jira issue", "icon": "ticket",
       "prefixes": ["RAM-", "RAP-"], "tail": "number",
-      "address": "https://acme.atlassian.net/browse/{ref}", "path": "/issue/{ref}" }
+      "address": "https://acme.atlassian.net/browse/{ref}", "path": "/issue/{ref}",
+      "fields": [
+        { "name": "title", "type": "title" },
+        { "name": "status", "type": "state" },
+        { "name": "assignee", "type": "text", "label": "Assignee" },
+        { "name": "body", "type": "markdown" }
+      ],
+      "search": [ { "field": "title" }, { "field": "body", "max": 10000 } ],
+      "views": {
+        "card": [ { "block": "title", "field": "title" }, { "block": "subtitle", "field": "key" },
+                  { "block": "badge", "field": "status" } ],
+        "pane": [ { "block": "title", "field": "title" }, { "block": "subtitle", "field": "key" },
+                  { "block": "badge", "field": "status" }, { "block": "field", "field": "assignee" },
+                  { "block": "markdown", "field": "body" } ]
+      } }
   ],
   "config_version": 1,
   "config": [
@@ -168,7 +182,9 @@ Not built yet, and ignored if sent: `events`, `actions`.
 
 ### Refs
 
-A plugin's things have names people and agents write: `RAM-123`. A ref says how one kind of them is named. It's data, not code: ws finds names in its own program and in its web UI, from the registration alone. A plugin may register several.
+A plugin's things have names people and agents write: `RAM-123`. A ref says how one kind of them is named, what one is made of, what it's found by and how it's drawn. All of it is data, not code: ws finds names, and draws things, in its own program and in its web UI, from the registration alone. A plugin may register several.
+
+How one is named:
 
 - `kind` is the plugin's word for what it is (`issue`): lower-case letters, digits and hyphens. ws asks about one by it ([`ref/show`](#refshow-request)).
 - `title` is what one is called, for a person. `icon` is one of ws's icon names.
@@ -177,13 +193,41 @@ A plugin's things have names people and agents write: `RAM-123`. A ref says how 
 - `address` is where one is outside ws, an `http` or `https` address with `{ref}` once, where the name goes. ws links a name to it when the name goes into a document, and reads such an address as the thing it names, whatever follows a `?` or `#` (unless the address has one of its own).
 - `path` is where one opens in the plugin's app, with `{ref}` once: a path as a view's is. Without it, a name goes to its `address`.
 
+What one is made of:
+
+- `fields` are a thing's fields: each a `name` (lower-case letters, digits and underscores), a `type`, and a `label` for where it's drawn with one. A thing, as the plugin gives one ([`thing/put`](#thingput-request), [`ref/show`](#refshow-request)), is a value for each, every value a string. What a kind has no field for is dropped.
+  - `title` is what the thing's called: a line. A kind with fields has exactly one, and a thing with nothing for it isn't kept.
+  - `state` is where it stands, in the plugin's words. At most one.
+  - `text` is words: a name, a priority, a number.
+  - `time` is a moment, RFC 3339.
+  - `markdown` is what it says at length.
+  - A type ws doesn't know is drawn as `text`.
+- Every thing has the field `key` besides: its name. A kind can't have a field called that.
+- A kind with no `fields` has names, and nothing ws keeps or draws.
+
+What one is found by:
+
+- `search` is the fields a thing is found by, in order, each as far as its `max` bytes (all ws keeps of it, with none). ws makes the words it looks through from these, and makes them again when they change. With no `search`, it's every field but the title. A thing is always found by its title and its name.
+
+How one is drawn:
+
+- `views` are how ws's web UI draws one, by where: `card`, under its name where it's written, and `pane`, beside the list in Find for the row the cursor's on. Each is blocks, in order, each showing one `field` (`key` among them). A block whose field a thing has nothing for isn't drawn.
+  - `title` is the line it's known by, and `subtitle` a quiet line under it.
+  - `badge` is a word or two set apart, on the line of the title or subtitle before it.
+  - `field` is a label and a value: the block's `label`, or else the field's own.
+  - `markdown` is drawn as ws draws markdown, to `lines` lines where that's set.
+  - A block ws doesn't know isn't drawn, and a view for somewhere ws doesn't know is ignored.
+- With no view for somewhere, ws draws one from the fields' types. `ws show`, in the terminal, always does.
+
+A plugin's own app, for what's more than looking, is another thing: [The view](#the-view).
+
 What ws does with them:
 
 - **It finds a name where it's whole:** not inside a longer word, a path or an address (`RAM-12-fix`, `docs/RAM-12.md` and `XRAM-12` name nothing). It doesn't ask whether there's a thing by that name until one is shown.
 - **It keeps them, by the plugin that registered them,** in the workspace's records, in place of what that plugin registered before. Names are found from there, whether the plugin's running or not, and removing the plugin forgets them.
 - **A prefix is the first plugin's to register it.** A second plugin's ref names by its other prefixes, and `ws plugin list` says what was left out. So is a ref that breaks the rules above: the rest of the registration stands.
-- **It asks the plugin** what a thing is when one is shown: `ws show RAM-123`, and the card under a name in the web UI.
 - **It keeps the things the plugin tells it of** ([Telling ws of things](#telling-ws-of-things)), so it finds them by what they say and draws them without asking.
+- **It asks the plugin** for a thing it wasn't told of, and for `ws show RAM-123`, which wants it as it is now.
 
 ### `config/changed` (notification)
 
@@ -220,31 +264,30 @@ Ctrl-C is `$/cancel_request` for this request.
 
 ### `ref/show` (request)
 
-Someone, or an agent, is looking at `RAM-123`. Added within version 1: a plugin that registers `refs` answers it.
+One thing, as the plugin has it now. ws asks for a name it wasn't told of (one that isn't on the plugin's board), and for `ws show RAM-123`. Added within version 1.
 
 ```json
 { "kind": "issue", "ref": "RAM-123", "full": false }
 ```
 
 - `kind` is the ref's, as registered, and `ref` the name as it was written. ws asks only about a name that kind names.
-- `full` is everything being asked for (`ws show --full`): nothing's to be left out of `markdown`. Without it, the plugin keeps to what's worth reading first.
+- `full` is everything being asked for (`ws show --full`): nothing's to be left out of what it says. Without it, the plugin keeps to what's worth reading first.
 
-The answer:
+The answer is the thing: a value for each of its kind's `fields`, as [`thing/put`](#thingput-request) gives one.
 
 ```json
 {
-  "title": "Token refresh is flaky",
-  "state": "In Progress",
-  "fields": [ { "label": "Assignee", "value": "Dana" } ],
-  "markdown": "The clock should be injected…"
+  "changed": "2026-11-18T10:42:00Z",
+  "fields": {
+    "title": "Token refresh is flaky", "status": "In Progress",
+    "assignee": "Dana", "body": "The clock should be injected…"
+  }
 }
 ```
 
-- `state` is where it stands, in the plugin's words.
-- `fields` are a few things worth a line each.
-- `markdown` is what it says, for `ws show`: its description, what's been said on it. ws says where it came from before it, so an agent reads it as information, not as instructions. The card in the web UI shows the rest and not this.
+ws shows it as it shows one it was told of: by the kind's views in the web UI, and by its fields' types in `ws show`, where what's `markdown` is said to be from outside the workspace, so an agent reads it as information, not as instructions.
 
-A name the plugin has nothing by is error `-32001`. ws gives a plugin twenty seconds to answer.
+A name the plugin has nothing by is error `-32001`. A plugin with nothing to say of one thing beyond what it's told ws answers `-32601`, and ws shows what it was told. ws gives a plugin twenty seconds to answer.
 
 ### `shutdown` (request)
 
@@ -370,7 +413,7 @@ No params. The workspace's repos, in ws's order:
 
 ## Telling ws of things
 
-Requests from the plugin, each answered, each added within version 1. A plugin tells ws of the things it has, so ws has them without asking: they're found by what they say (`ws find`, Find in the web UI), with the plugin's other things and ws's own, whether the plugin's running or not. What a thing is in full, the plugin still says when it's shown ([`ref/show`](#refshow-request)).
+Requests from the plugin, each answered, each added within version 1. A plugin tells ws of the things it has, so ws has them without asking: they're found by what their kind says they're found by (`ws find`, Find in the web UI) and drawn by their kind's views, with the plugin's other things and ws's own, whether the plugin's running or not.
 
 A thing is named by one of the plugin's [refs](#refs): its `kind` is the ref's, and its `ref` one of that kind's names, as ws took them. ws keeps no thing it couldn't name. It keeps each under the plugin that told it, and forgets them when the plugin's removed, or when the plugin registers refs that name them no more.
 
@@ -379,19 +422,20 @@ A thing is named by one of the plugin's [refs](#refs): its `kind` is the ref's, 
 ```json
 {
   "things": [
-    { "kind": "issue", "ref": "RAM-123", "title": "Token refresh is flaky",
-      "state": "In Progress", "changed": "2026-11-18T10:42:00Z",
-      "text": "The clock should be injected…" }
+    { "kind": "issue", "ref": "RAM-123", "changed": "2026-11-18T10:42:00Z",
+      "fields": {
+        "title": "Token refresh is flaky", "status": "In Progress",
+        "assignee": "Dana", "body": "The clock should be injected…"
+      } }
   ]
 }
 ```
 
 Each is kept, in place of what ws had by that name. One that's as ws has it already isn't written again, so telling ws of everything after each sync costs little.
 
-- `title` is what it's called: a line. A thing with none isn't kept.
-- `state` is where it stands, in the plugin's words.
+- `fields` are its values, by its kind's [fields](#refs)' names. A thing with nothing for its kind's `title` isn't kept.
 - `changed` is when it last changed, RFC 3339, where the plugin knows.
-- `text` is what it says, as markdown or plain words, to be found by. ws keeps the first 20,000 bytes.
+- ws keeps the start of a long value: 300 bytes of a `title`, 60 of a `state`, 2,000 of `text`, 50,000 of `markdown`. It keeps what it's told as it's told, and makes what it's found by from that.
 - Up to 500 things in one request. More is refused whole (`-32602`): send them in turn.
 
 The answer says which weren't kept, and why. The rest were.
@@ -400,7 +444,7 @@ The answer says which weren't kept, and why. The rest were.
 { "refused": [ { "kind": "issue", "ref": "ram-12", "why": "it isn't one of issue's names, as ws keeps them" } ] }
 ```
 
-A thing is refused when its kind isn't a ref ws took from this plugin, its name isn't one of that kind's, it has no title, or ws has something of its own by that name.
+A thing is refused when its kind isn't a ref ws took from this plugin, its name isn't one of that kind's, it has nothing for its kind's title, or ws has something of its own by that name.
 
 ### `thing/remove` (request)
 
