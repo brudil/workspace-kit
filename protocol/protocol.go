@@ -138,6 +138,18 @@ type Registration struct {
 	Config        []ConfigKey `json:"config,omitempty"`
 }
 
+// CommandName is the word after ws that runs the plugin's commands: its
+// own, or the plugin's name. "" if it adds none.
+func (r Registration) CommandName(plugin string) string {
+	if r.Commands == nil {
+		return ""
+	}
+	if r.Commands.Name != "" {
+		return r.Commands.Name
+	}
+	return plugin
+}
+
 // View is an entry in ws's sidebar, and where in the plugin's app it opens.
 type View struct {
 	Title string `json:"title"`
@@ -213,6 +225,10 @@ type ConfigKey struct {
 	Options  []string `json:"options,omitempty"`
 	Scope    string   `json:"scope,omitempty"`
 }
+
+// Secret says whether the key's value is a secret: kept apart from
+// config's files, and always local.
+func (k ConfigKey) Secret() bool { return k.Type == TypeSecret }
 
 // ConfigChangedParams is the whole config, after a change.
 type ConfigChangedParams struct {

@@ -47,3 +47,18 @@ func TestVersionIsTheNewest(t *testing.T) {
 		t.Errorf("Version is %d, and the newest of Versions %v", protocol.Version, protocol.Versions)
 	}
 }
+
+func TestCommandNameIsTheWordAfterWS(t *testing.T) {
+	for _, c := range []struct {
+		r    protocol.Registration
+		want string
+	}{
+		{protocol.Registration{}, ""},
+		{protocol.Registration{Commands: &protocol.Commands{}}, "jira"},
+		{protocol.Registration{Commands: &protocol.Commands{Name: "issues"}}, "issues"},
+	} {
+		if got := c.r.CommandName("jira"); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.r.Commands, got, c.want)
+		}
+	}
+}
