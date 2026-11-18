@@ -294,6 +294,32 @@ func (ws *WS) Missions(missions ...protocol.MissionDetail) {
 	})
 }
 
+// Shows are what the stand-in shows: what it answers p.Show and p.ShowIn
+// with, each found by its Ref and Mission. Anything else is ErrNotFound.
+func (ws *WS) Shows(shown ...protocol.Shown) {
+	ws.Answer(protocol.MethodShow, func(params json.RawMessage) (any, error) {
+		var in protocol.ShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		for _, s := range shown {
+			if s.Ref == in.Ref && s.Mission == in.Mission {
+				if s.Body == nil {
+					s.Body = []string{}
+				}
+				if s.Links == nil {
+					s.Links = []protocol.ShownLink{}
+				}
+				if s.Said == nil {
+					s.Said = []protocol.Said{}
+				}
+				return s, nil
+			}
+		}
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has nothing called " + in.Ref}
+	})
+}
+
 // Repos are the repos the stand-in has: what it answers p.Repos with.
 func (ws *WS) Repos(repos ...protocol.Repo) {
 	ws.Answer(protocol.MethodRepoList, func(json.RawMessage) (any, error) {

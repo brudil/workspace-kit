@@ -468,6 +468,48 @@ No params. The workspace's repos, in ws's order:
 - `title` is what ws calls it: its name, when ws.toml gives it no other.
 - A capsule's `mission` is the slug of the mission in play that works in it. `ground` is the repo's default branch, which work starts from.
 
+### `show` (request)
+
+```json
+{ "ref": "RAM-123" }
+```
+
+One of the workspace's things as `ws show` shows it: what it is, what it links to, and what points at it from elsewhere in the workspace. It's how a plugin finds what's said of one of its things (the missions about it, the conversations that name it), and goes from there to any of them.
+
+`ref` names it as `ws show` does: one of a plugin's things (`RAM-123`), a pull request (`api#12`), a document (`records:docs/plan.md`), one of the workspace's conversations, pages or artifacts (`w4`, `p2`, `a3`). One of a mission's own (`t3`, `d1`, `s2`, `c1`, `r1.c2`) is asked for with its mission. A mission itself is its slug, as `ref` or as `mission` with no `ref`. `full` is everything a view would otherwise cut short.
+
+```json
+{
+  "ref": "RAM-123",
+  "head": "Jira issue RAM-123: Token refresh is flaky (In Progress)",
+  "body": ["Assignee: Sam", "At: https://example.atlassian.net/browse/RAM-123"],
+  "links": [{ "ref": "RAM-100", "what": "Parent" }],
+  "said": [
+    {
+      "ref": "token-cache", "kind": "mission", "title": "Token cache",
+      "state": "active", "standing": true, "how": "about",
+      "at": "2026-11-17T09:12:00Z", "path": "/missions/token-cache"
+    },
+    {
+      "ref": "t3", "mission": "token-cache", "kind": "thread-ask", "title": "Which clock?",
+      "state": "resolved", "standing": false, "how": "mentions",
+      "at": "2026-11-18T10:02:00Z", "path": "/missions/token-cache/conversations/t3"
+    }
+  ],
+  "path": "/x/jira/issue/RAM-123"
+}
+```
+
+- `head` is what it is, in a line, and `body` the essentials of it, as `ws show` prints them: plain text, a line or a paragraph each. One of the plugin's own things is as the plugin last told ws.
+- `links` are what it links to. Each is asked for in turn with its `ref`, and the `mission` this was asked with.
+- `said` is what points at it, what still stands first, then latest first. `ref` is its ref where it's read: in `mission`, or under `pull_request` (`api#12`), or, with neither, the workspace's. A mission's own `ref` is its slug. Each is asked for in turn with its `ref` and `mission` as they are, and one under a pull request by the pull request.
+- `kind` is what it is: `mission`, `decision`, `comment`, `review`, `talk`, `thread-ask`, `thread-change`, `thread-note`, `thing`, `pull-request`, `page`, `artifact`, and whatever ws adds. `state` is where it stands in its kind's words, and `standing` whether that's still in play.
+- `how` is how it points: `about`, `on`, `by`, `for`, `of`, `in`, `from`, `mentions`, `lands`, and whatever ws adds. `lines` is where in a file, as they were when it was said, and `at` when it was said, absent where ws hasn't when.
+- `path` is its page in ws's web UI, where it has one: what a plugin's app opens with `ws:open`.
+- ws says what it has linked. Something written in a brief or a document that only names a thing isn't linked yet, so isn't in `said`.
+
+Nothing by that name is `-32001`.
+
 ## Telling ws of things
 
 Requests from the plugin, each answered, each added within version 1. A plugin tells ws of the things it has, so ws has them without asking: they're found by what their kind says they're found by (`ws find`, Find in the web UI) and drawn by their kind's views, with the plugin's other things and ws's own, whether the plugin's running or not.

@@ -948,6 +948,20 @@ func TestAskingWS(t *testing.T) {
 			}
 			return c.Say(m.Title + ": " + m.Brief + " in " + m.Capsules[0].PullRequest.State)
 		}).Args("SLUG")
+		p.Command("said", "", func(c *plugin.Call) error {
+			shown, err := p.ShowIn(c.Context(), c.Option("mission"), c.Arg(0))
+			if errors.Is(err, plugin.ErrNotFound) {
+				return c.Say("none")
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(c.Stdout(), shown.Head, len(shown.Body), len(shown.Links))
+			for _, s := range shown.Said {
+				fmt.Fprintln(c.Stdout(), s.How, s.Kind, s.Mission, s.Ref, s.Standing, s.Path)
+			}
+			return nil
+		}).Args("REF").Option("mission", "the mission it's one of")
 		p.Command("repos", "", func(c *plugin.Call) error {
 			rs, err := p.Repos(c.Context())
 			if err != nil {
@@ -963,6 +977,9 @@ func TestAskingWS(t *testing.T) {
 	// A ws from before these: each is ErrUnsupported, saying so.
 	if got := ws.Run("repos"); got.Exit == 0 || !strings.Contains(got.Stderr, "update ws") {
 		t.Errorf("repos of a ws that can't answer: %+v", got)
+	}
+	if got := ws.Run("said", "RAM-1"); got.Exit == 0 || !strings.Contains(got.Stderr, "update ws") {
+		t.Errorf("showing in a ws that can't answer: %+v", got)
 	}
 
 	ws.Missions(
@@ -990,6 +1007,25 @@ func TestAskingWS(t *testing.T) {
 	}
 	if got := ws.Run("repos"); got.Stdout != "api 1 token-cache\n" {
 		t.Errorf("repos: %+v", got)
+	}
+
+	// What ws show shows, as data: one of the workspace's, and one of a
+	// mission's own.
+	ws.Shows(
+		protocol.Shown{Ref: "RAM-1", Head: "Jira issue RAM-1", Said: []protocol.Said{
+			{Ref: "token-cache", Kind: "mission", Title: "Token cache", State: "active", Standing: true, How: protocol.SaidAbout, Path: "/missions/token-cache"},
+			{Ref: "d2", Mission: "token-cache", Kind: "decision", How: protocol.SaidMentions, Path: "/missions/token-cache"},
+		}},
+		protocol.Shown{Ref: "d2", Mission: "token-cache", Head: "Decision d2", Body: []string{"Cache for an hour"}, Links: []protocol.ShownLink{{Ref: "t1", What: "the thread it settled"}}},
+	)
+	if got := ws.Run("said", "RAM-1"); got.Stdout != "Jira issue RAM-1 0 0\nabout mission  token-cache true /missions/token-cache\nmentions decision token-cache d2 false /missions/token-cache\n" {
+		t.Errorf("one of the workspace's things, shown: %+v", got)
+	}
+	if got := ws.Run("said", "--mission", "token-cache", "d2"); got.Stdout != "Decision d2 1 1\n" {
+		t.Errorf("one of a mission's things, shown: %+v", got)
+	}
+	if got := ws.Run("said", "d2"); got.Stdout != "none\n" {
+		t.Errorf("a mission's thing asked for without its mission: %+v", got)
 	}
 }
 
