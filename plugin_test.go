@@ -200,6 +200,23 @@ func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 			},
 			why: `its view card shows "status"`,
 		},
+		"an action declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Action("sync", "Sync", func(*plugin.Act) error { return nil })
+				p.Action("sync", "Sync again", func(*plugin.Act) error { return nil })
+			},
+			why: `its action "sync" is there twice`,
+		},
+		"an action with nothing that does it": {
+			setup: func(p *plugin.Plugin) { p.Action("sync", "Sync", nil) },
+			why:   "has nothing that does it",
+		},
+		"an action on a thing with no title": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Action("move", " ", func(*plugin.Act) error { return nil })
+			},
+			why: `its action "move" has no title`,
+		},
 		"a config key declared twice": {
 			setup: func(p *plugin.Plugin) {
 				p.Config.String("a", "A")
@@ -1102,5 +1119,111 @@ func TestWS(t *testing.T) {
 	plugintest.New(t, nil, func(pl *plugin.Plugin) { bare = pl })
 	if _, err := bare.WS(context.Background(), "show"); !errors.Is(err, plugin.ErrNoWS) {
 		t.Errorf("with no ws: %v", err)
+	}
+}
+
+// --- actions ---
+
+// A plugin's actions are run from Find: its own, and what's done to one
+// of its things. One that asks is run again with what's answered, from
+// the start, and does nothing until it's asked all it wants.
+func TestActionsAskAndThenDo(t *testing.T) {
+	var moved, made []string
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		issues(p).Action("move", "Move to…", func(a *plugin.Act) error {
+			to, err := a.Pick("Move "+a.Name+" to", plugin.Choices("To Do", "In Progress")...)
+			if err != nil {
+				return err
+			}
+			why, err := a.Ask("Why?", "A line")
+			if err != nil {
+				return err
+			}
+			moved = append(moved, a.Name+" to "+to+": "+why)
+			return a.Say(a.Name + " is " + to)
+		}).Action("open", "Open it", func(a *plugin.Act) error {
+			a.Open("/issue/" + a.Name)
+			return nil
+		})
+		p.Action("new", "New issue…", func(a *plugin.Act) error {
+			title, err := a.Ask("What's the issue?", "A title")
+			if err != nil {
+				return err
+			}
+			if title == "boom" {
+				panic("it went wrong")
+			}
+			made = append(made, title)
+			a.Open("/issue/RAM-9")
+			return a.Say("Created RAM-9")
+		}).Icon("plus").Hint("In Jira")
+		p.Action("sync", "Sync now", func(a *plugin.Act) error { return errors.New("401 from Jira") })
+	})
+
+	reg := ws.Registration()
+	got, _ := json.Marshal(reg.Actions)
+	if string(got) != `[{"id":"new","title":"New issue…","icon":"plus","hint":"In Jira"},{"id":"sync","title":"Sync now"}]` {
+		t.Errorf("the plugin's own: %s", got)
+	}
+	got, _ = json.Marshal(reg.Refs[0].Actions)
+	if string(got) != `[{"id":"move","title":"Move to…"},{"id":"open","title":"Open it"}]` {
+		t.Errorf("an issue's: %s", got)
+	}
+
+	// On a thing: asked a pick, then a line, then done, once.
+	r, err := ws.ActOn("issue", "RAM-1", "move")
+	if err != nil || r.Ask == nil || r.Ask.Type != protocol.AskPick || r.Ask.Title != "Move RAM-1 to" || len(r.Ask.Options) != 2 || r.Ask.Options[1].Value != "In Progress" || len(moved) != 0 {
+		t.Fatalf("first: %+v, %v, moved %v", r, err, moved)
+	}
+	r, err = ws.ActOn("issue", "RAM-1", "move", "In Progress")
+	if err != nil || r.Ask == nil || r.Ask.Type != protocol.AskText || r.Ask.Placeholder != "A line" || len(moved) != 0 {
+		t.Fatalf("second: %+v, %v, moved %v", r, err, moved)
+	}
+	r, err = ws.ActOn("issue", "RAM-1", "move", "In Progress", "It's started")
+	if err != nil || r.Ask != nil || r.Say != "RAM-1 is In Progress" || len(moved) != 1 || moved[0] != "RAM-1 to In Progress: It's started" {
+		t.Fatalf("third: %+v, %v, moved %v", r, err, moved)
+	}
+	if r, err := ws.ActOn("issue", "RAM-2", "open"); err != nil || r.Open != "/issue/RAM-2" {
+		t.Errorf("open: %+v, %v", r, err)
+	}
+
+	// The plugin's own.
+	if r, err := ws.Act("new"); err != nil || r.Ask == nil || r.Ask.Title != "What's the issue?" {
+		t.Errorf("new, unanswered: %+v, %v", r, err)
+	}
+	if r, err := ws.Act("new", "The clock"); err != nil || r.Say != "Created RAM-9" || r.Open != "/issue/RAM-9" || len(made) != 1 {
+		t.Errorf("new, answered: %+v, %v, made %v", r, err, made)
+	}
+	// One that fails says why; one that panics fails its own run; one
+	// that isn't there, or isn't that kind's, is said.
+	if _, err := ws.Act("sync"); err == nil || !strings.Contains(err.Error(), "401 from Jira") {
+		t.Errorf("sync: %v", err)
+	}
+	if _, err := ws.Act("new", "boom"); err == nil || !strings.Contains(err.Error(), "went wrong") {
+		t.Errorf("a panic: %v", err)
+	}
+	for _, run := range []func() (protocol.ActionRunResult, error){
+		func() (protocol.ActionRunResult, error) { return ws.Act("move") },
+		func() (protocol.ActionRunResult, error) { return ws.ActOn("issue", "RAM-1", "new") },
+		func() (protocol.ActionRunResult, error) { return ws.ActOn("sprint", "SPRINT-1", "move") },
+	} {
+		if _, err := run(); err == nil || !strings.Contains(err.Error(), "no action called") {
+			t.Errorf("one that isn't there: %v", err)
+		}
+	}
+	if r, err := ws.Act("new", "After all that"); err != nil || r.Say == "" {
+		t.Errorf("after all that: %+v, %v", r, err)
+	}
+}
+
+// A field that names other things says how it points at them.
+func TestAFieldNamesOtherThings(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Ref("issue", "Issue").Prefix("RAM-").Fields(plugin.Title("title"),
+			plugin.Names("parent", "Parent", protocol.LinkIn), plugin.NamesSeveral("links", "Links"))
+	})
+	got, _ := json.Marshal(ws.Registration().Refs[0].Fields[1:])
+	if string(got) != `[{"name":"parent","type":"ref","label":"Parent","link":"in"},{"name":"links","type":"refs","label":"Links"}]` {
+		t.Errorf("fields: %s", got)
 	}
 }

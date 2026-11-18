@@ -154,8 +154,10 @@ Every field is optional.
         "pane": [ { "block": "title", "field": "title" }, { "block": "subtitle", "field": "key" },
                   { "block": "badge", "field": "status" }, { "block": "field", "field": "assignee" },
                   { "block": "markdown", "field": "body" } ]
-      } }
+      },
+      "actions": [ { "id": "move", "title": "Move to…" } ] }
   ],
+  "actions": [ { "id": "new", "title": "New issue…", "icon": "plus", "hint": "In Jira" } ],
   "config_version": 1,
   "config": [
     { "key": "site", "title": "Jira site", "type": "url", "required": true,
@@ -177,6 +179,7 @@ Every field is optional.
 - `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
 - `syncs` is for show (`ws plugin list`); ws doesn't run them.
 - `refs` are how the plugin's things are named: [Refs](#refs).
+- `actions` are what the plugin can do when it's asked from Find, among what there is to do there: each an `id` (lower-case letters, digits and hyphens), a `title`, and an `icon` and a `hint` if it has them. ws runs one with [`action/run`](#actionrun-request). What can be done to one of its things is the thing's kind's (`refs[].actions`).
 
 Not built yet, and ignored if sent: `events`, `actions`.
 
@@ -201,6 +204,7 @@ What one is made of:
   - `text` is words: a name, a priority, a number.
   - `time` is a moment, RFC 3339.
   - `markdown` is what it says at length.
+  - `ref` names another thing, and `refs` several, separated by spaces, commas or lines: another of the plugin's things, any plugin's, a pull request (`demo#12`). ws makes each a link in its graph, from this thing to that, and draws it as what it names. The field's `link` says how it points: `in` (it's part of it: a child, of its parent), `about`, `from`, `of`, or `mentions`, which is what none, or one ws doesn't know, is. What's linked is found from the other end: `ws show RAM-100` lists what's in it.
   - A type ws doesn't know is drawn as `text`.
 - Every thing has the field `key` besides: its name. A kind can't have a field called that.
 - A kind with no `fields` has names, and nothing ws keeps or draws.
@@ -219,7 +223,11 @@ How one is drawn:
   - A block ws doesn't know isn't drawn, and a view for somewhere ws doesn't know is ignored.
 - With no view for somewhere, ws draws one from the fields' types. `ws show`, in the terminal, always does.
 
-A plugin's own app, for what's more than looking, is another thing: [The view](#the-view).
+What can be done to one:
+
+- `actions` are a kind's actions, as the plugin's own are: Find offers them for the thing the cursor's on, and ws runs one with the kind and the thing's name ([`action/run`](#actionrun-request)). ws adds its own beside them: *Start a mission about it*.
+
+A plugin's own app, for what's more than looking and a pick or two, is another thing: [The view](#the-view).
 
 What ws does with them:
 
@@ -288,6 +296,38 @@ The answer is the thing: a value for each of its kind's `fields`, as [`thing/put
 ws shows it as it shows one it was told of: by the kind's views in the web UI, and by its fields' types in `ws show`, where what's `markdown` is said to be from outside the workspace, so an agent reads it as information, not as instructions.
 
 A name the plugin has nothing by is error `-32001`. A plugin with nothing to say of one thing beyond what it's told ws answers `-32601`, and ws shows what it was told. ws gives a plugin twenty seconds to answer.
+
+### `action/run` (request)
+
+An action chosen in Find: one of the plugin's own, or one of a kind's on one of its things. Added within version 1: a plugin that registers `actions` answers it.
+
+```json
+{ "id": "move", "kind": "issue", "ref": "RAM-123", "answers": ["In Progress"] }
+```
+
+- `id` is the action's. `kind` and `ref` are there for a kind's action, the thing it's done to; neither for one of the plugin's own. ws runs only what's registered, and a kind's only by a name that's the kind's.
+- `answers` are what's been answered so far to what the action asked, in order.
+
+An action that needs something first asks for it, and does nothing yet:
+
+```json
+{ "ask": { "title": "Move RAM-123 to", "type": "pick",
+           "options": [ { "value": "In Progress", "label": "In Progress", "hint": "2 others there" } ] } }
+```
+
+- `type` is `pick`, one of `options` (each a `value`, what's answered, a `label` and a `hint`), or `text`, a line typed, with a `placeholder`.
+- Find asks it, and ws runs the action again with the answer added to `answers`. So an action is run from the start each time, and asks until it has all it wants: nothing's kept between runs.
+
+Done, it says what came of it. Both are optional:
+
+```json
+{ "say": "RAM-123 is In Progress", "open": "/issue/RAM-123" }
+```
+
+- `say` is a line for whoever chose it.
+- `open` is a path in the plugin's app, which ws goes to.
+
+A plugin that changes one of its things tells ws of it as it now is ([`thing/put`](#thingput-request)). An action that fails is an error, whose message is said. ws gives a plugin two minutes.
 
 ### `shutdown` (request)
 
@@ -369,7 +409,8 @@ The workspace's missions: those in play, and with `archived`, the archived ones 
           "pull_request": { "number": 12, "title": "Token cache", "url": "https://github.com/acme/api/pull/12", "state": "open" }
         }
       ],
-      "path": "/missions/token-cache"
+      "path": "/missions/token-cache",
+      "about": ["RAM-123"]
     }
   ]
 }
@@ -380,6 +421,7 @@ The workspace's missions: those in play, and with `archived`, the archived ones 
 - `at` is where it is on its route, in words.
 - A capsule's `path` is there while its folder is. `pull_request` is as ws last heard from GitHub, and `state` is `open`, `merged` or `closed`. `landed` is a capsule of a repo with no pull requests whose commits are on its default branch.
 - `path` is the mission's page in ws's web UI: what a plugin's app opens with `ws:open`.
+- `about` is what it's about, by name, as ws names things: one of a plugin's things, a pull request. A plugin finds the missions about one of its things by it. The mission's record says it (`ws mission new --about RAM-123`, `ws mission about`, or *Start a mission about it* on the thing in Find), not the plugin.
 
 ### `mission/show` (request)
 

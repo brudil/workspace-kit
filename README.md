@@ -110,10 +110,12 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `.Search`, with `plugin.All`, `Upto` | What one is found by, and how much of each field. ws makes the words it looks through, and makes them again when this changes. |
 | `.Card`, `.Pane`, with `ui.Title`, `Subtitle`, `Badge`, `Field`, `Markdown` | How ws draws one, said in Go and sent as data: under its name, and beside the list in Find. ws draws it in its own web UI, and nothing of the plugin's runs there. The plugin's app (`p.UI`) is for what's more than looking. |
 | `ref.Mirror`, `ref.Put`, `ref.Remove` | Telling ws of the things the plugin has, so ws finds and draws them without asking, running or not. `Mirror` is all of a kind, from a sync: what's gone is forgotten. ws keeps them under the plugin, and forgets them when it's removed. What ws wouldn't keep is a `*Refused`. |
+| `plugin.Names`, `NamesSeveral` | A field that names other things (a parent, what it links to). ws links the two in its graph, by how the field says it points, and draws the name as what it names. |
+| `p.Action`, `.Action` on a ref, with `a.Pick`, `a.Ask`, `a.Say`, `a.Open` | Something the plugin can do, chosen in Find: its own, or to one of its things. One that needs something asks for it first (a pick, a line), and is run again from the start with the answer: ask, then do. |
 | `.Show` | One thing, as it is now: for one ws wasn't told of, and for `ws show RAM-123`. `ErrNotFound` for a name the plugin has nothing by. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, and `ws.Things(kind)` is what it's told ws of. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, and `ws.Act` and `ws.ActOn` run its actions with what's been answered. |
 
 ## A plugin's folder
 
@@ -180,4 +182,4 @@ The framework is before 1.0, so a change that breaks plugins is a minor version.
 
 ## Not here yet
 
-Links between a plugin's things and ws's (a mission for an issue), palette actions, events and an HTTP client.
+Events (a mission's pull request merging, told to a plugin), starting a mission from a plugin, and an HTTP client.

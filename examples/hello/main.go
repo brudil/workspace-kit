@@ -110,6 +110,17 @@ func setup(p *plugin.Plugin) {
 		hello(w, r)
 	})
 
+	// Something to do, from Find: it asks who to greet, and says it. An
+	// action asks before it does anything, since it's run again from the
+	// start once it's answered.
+	p.Action("greet", "Say hello to…", func(a *plugin.Act) error {
+		name, err := a.Ask("Who to?", "A name")
+		if err != nil {
+			return err
+		}
+		return a.Say(greeting.Get() + ", " + name)
+	}).Icon("sparkle")
+
 	// ws hello say
 	p.Command("say", "Says the greeting", func(c *plugin.Call) error {
 		name := "workspace"

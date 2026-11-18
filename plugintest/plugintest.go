@@ -411,6 +411,26 @@ func (ws *WS) Show(kind, name string, full bool) (protocol.RefShowResult, error)
 	return out, err
 }
 
+// Act runs one of the plugin's own actions, as ws does when it's chosen
+// in Find, with what's been answered so far to what it asked: an answer
+// with an Ask is the action wanting one more.
+func (ws *WS) Act(id string, answers ...string) (protocol.ActionRunResult, error) {
+	return ws.act(protocol.ActionRunParams{ID: id, Answers: answers})
+}
+
+// ActOn runs one of a kind's actions on one of its things, by name.
+func (ws *WS) ActOn(kind, name, id string, answers ...string) (protocol.ActionRunResult, error) {
+	return ws.act(protocol.ActionRunParams{ID: id, Kind: kind, Ref: name, Answers: answers})
+}
+
+func (ws *WS) act(in protocol.ActionRunParams) (protocol.ActionRunResult, error) {
+	if in.Answers == nil {
+		in.Answers = []string{}
+	}
+	var out protocol.ActionRunResult
+	return out, ws.conn.Call(context.Background(), protocol.MethodActionRun, in, &out)
+}
+
 // Protocol is the version of the plugin protocol the handshake chose.
 func (ws *WS) Protocol() int { return ws.ver }
 

@@ -28,6 +28,7 @@ type Ref struct {
 	p    *Plugin
 	ref  protocol.Ref
 	show func(ctx context.Context, a Asked) (Thing, error)
+	acts map[string]func(*Act) error // what does each of its Actions
 }
 
 // Asked is one thing ws asks about, by the name it was written as.
@@ -150,6 +151,21 @@ func Markdown(name string, label ...string) FieldSpec {
 	return field(name, protocol.FieldMarkdown, label)
 }
 
+// Names is a field that names another thing (its parent, the issue it
+// blocks): its value is that thing's name. ws links the two in its graph
+// and draws the name as what it names. how is how it points, one of
+// protocol's Links (protocol.LinkIn for a parent): it names it, with none.
+func Names(name, label string, how ...string) FieldSpec {
+	return FieldSpec{Name: name, Type: protocol.FieldRef, Label: label, Link: strings.Join(how, "")}
+}
+
+// NamesSeveral is a field that names other things (its children, what it
+// links to): its value is their names, separated by spaces, commas or
+// lines.
+func NamesSeveral(name, label string, how ...string) FieldSpec {
+	return FieldSpec{Name: name, Type: protocol.FieldRefs, Label: label, Link: strings.Join(how, "")}
+}
+
 // Fields are what one of this kind's things is made of: what Mirror, Put
 // and Show give a value for. Every thing has ui.Key besides, its name.
 func (r *Ref) Fields(fields ...FieldSpec) *Ref {
@@ -192,6 +208,27 @@ func (r *Ref) view(where string, blocks []ui.Block) *Ref {
 		wire = append(wire, b.Wire())
 	}
 	r.ref.Views[where] = wire
+	return r
+}
+
+// Action declares something that can be done to one of this kind's
+// things, and is what does it: Find offers it for the thing the cursor's
+// on, and fn is run with the thing's name (Act.Name). See Plugin.Action.
+//
+//	issue.Action("move", "Move to…", func(a *plugin.Act) error {
+//		to, err := a.Pick("Move "+a.Name+" to", plugin.Choices("To Do", "In Progress", "Done")...)
+//		if err != nil {
+//			return err
+//		}
+//		…
+//		return a.Say(a.Name + " is " + to)
+//	})
+func (r *Ref) Action(id, title string, fn func(a *Act) error) *Ref {
+	r.ref.Actions = append(r.ref.Actions, protocol.Action{ID: id, Title: title})
+	if r.acts == nil {
+		r.acts = map[string]func(*Act) error{}
+	}
+	r.acts[id] = fn
 	return r
 }
 

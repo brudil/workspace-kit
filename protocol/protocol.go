@@ -43,6 +43,10 @@ const (
 	// RefShowParams → RefShowResult. An addition to version 1: a plugin
 	// from before it answers CodeMethodNotFound, and registers no refs.
 	MethodRefShow = "ref/show" // request
+	// MethodActionRun runs one of the plugin's actions, its own or on one
+	// of its things: ActionRunParams → ActionRunResult. An addition to
+	// version 1: a plugin that registers actions answers it.
+	MethodActionRun = "action/run" // request
 )
 
 // What a plugin sends ws: notifications all.
@@ -137,13 +141,17 @@ type InitializeResult struct {
 
 // Registration is everything a plugin adds to ws. Every field is optional.
 type Registration struct {
-	Description   string      `json:"description,omitempty"`
-	Views         []View      `json:"views,omitempty"`
-	UI            *UI         `json:"ui,omitempty"`
-	Commands      *Commands   `json:"commands,omitempty"`
-	Agent         *Agent      `json:"agent,omitempty"`
-	Syncs         []Sync      `json:"syncs,omitempty"`
-	Refs          []Ref       `json:"refs,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Views       []View    `json:"views,omitempty"`
+	UI          *UI       `json:"ui,omitempty"`
+	Commands    *Commands `json:"commands,omitempty"`
+	Agent       *Agent    `json:"agent,omitempty"`
+	Syncs       []Sync    `json:"syncs,omitempty"`
+	Refs        []Ref     `json:"refs,omitempty"`
+	// Actions are things the plugin can do, offered among what there is
+	// to do in Find. What can be done to one of its things is the thing's
+	// kind's (Ref.Actions).
+	Actions       []Action    `json:"actions,omitempty"`
 	ConfigVersion int         `json:"config_version,omitempty"`
 	Config        []ConfigKey `json:"config,omitempty"`
 }
@@ -246,6 +254,9 @@ type Ref struct {
 	// With none for somewhere, ws draws one from the fields' types. A
 	// view for somewhere ws doesn't know is ignored.
 	Views map[string][]Block `json:"views,omitempty"`
+	// Actions are what can be done to one of its things: offered in Find
+	// for the thing the cursor's on, and run with its name.
+	Actions []Action `json:"actions,omitempty"`
 }
 
 // Field is one of the things a kind's things are made of: its name, in
@@ -255,7 +266,22 @@ type Field struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Label string `json:"label,omitempty"`
+	// Link is how a FieldRef or a FieldRefs points at what it names, in
+	// ws's graph: one of the Links. None, or one ws doesn't know, is
+	// LinkMentions.
+	Link string `json:"link,omitempty"`
 }
+
+// How a field that names other things points at them: ws's graph has a
+// short, closed list, so that whatever reads a link can say why it's
+// worth following.
+const (
+	LinkMentions = "mentions" // it names it
+	LinkIn       = "in"       // it's part of it: a child, of its parent
+	LinkAbout    = "about"    // it's about it
+	LinkFrom     = "from"     // it came out of it
+	LinkOf       = "of"       // it's one of its: a comment, a review
+)
 
 // FieldKey is the field every thing has without its kind saying so: its
 // name (RAM-123). A view's block and what's searched may name it.
@@ -268,6 +294,13 @@ const (
 	FieldText     = "text"     // words: a name, a number, a few of them
 	FieldTime     = "time"     // a moment, RFC 3339
 	FieldMarkdown = "markdown" // what it says, at length
+	// A field that names other things: one name, or several, separated by
+	// spaces, commas or lines. Each that's a name ws reads (another of
+	// the plugin's things, any plugin's, a pull request) is a link in
+	// ws's graph, from this thing to it (Field.Link), and is drawn as
+	// what it names.
+	FieldRef  = "ref"
+	FieldRefs = "refs"
 )
 
 // Searched is a field a thing is found by, and how much of it: Max bytes,
@@ -424,7 +457,80 @@ func (r Ref) Problem() string {
 			}
 		}
 	}
+	return ActionsProblem(r.Actions)
+}
+
+// Action is something a plugin can do when it's asked from Find: its id,
+// in lower-case letters, digits and hyphens, and what it's called there.
+type Action struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Icon is one of ws's icon names. Hint says more, after the title.
+	Icon string `json:"icon,omitempty"`
+	Hint string `json:"hint,omitempty"`
+}
+
+var actionID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+
+// ActionsProblem says what's wrong with a list of actions as registered,
+// or "".
+func ActionsProblem(actions []Action) string {
+	seen := map[string]bool{}
+	for _, a := range actions {
+		switch {
+		case !actionID.MatchString(a.ID):
+			return fmt.Sprintf("its action %q must be lower-case letters, digits and hyphens, starting with a letter", a.ID)
+		case seen[a.ID]:
+			return fmt.Sprintf("its action %q is there twice", a.ID)
+		case strings.TrimSpace(a.Title) == "":
+			return fmt.Sprintf("its action %q has no title: it's what Find calls it", a.ID)
+		}
+		seen[a.ID] = true
+	}
 	return ""
+}
+
+// ActionRunParams runs an action: the plugin's own, by its id, or one of
+// a kind's on one thing, by the kind and the thing's name. Answers are
+// what's been answered so far to what the action asked, in order: an
+// action that asks is run again with one more, from the start.
+type ActionRunParams struct {
+	ID      string   `json:"id"`
+	Kind    string   `json:"kind,omitempty"`
+	Ref     string   `json:"ref,omitempty"`
+	Answers []string `json:"answers"`
+}
+
+// ActionRunResult is what came of it. With Ask, nothing's been done yet:
+// the action wants one thing answered, and is run again with the answer.
+// Otherwise it's done: Say is a line to tell whoever asked, and Open a
+// path in the plugin's app to go to.
+type ActionRunResult struct {
+	Ask  *Ask   `json:"ask,omitempty"`
+	Say  string `json:"say,omitempty"`
+	Open string `json:"open,omitempty"`
+}
+
+// Ask is one thing an action wants answered before it does anything.
+type Ask struct {
+	Title string `json:"title"`
+	// Type is AskPick, one of Options, or AskText, a line typed.
+	Type        string   `json:"type"`
+	Options     []Option `json:"options,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+}
+
+// The types of an ask.
+const (
+	AskPick = "pick"
+	AskText = "text"
+)
+
+// Option is one thing to pick: what's answered (Value), and what's shown.
+type Option struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Hint  string `json:"hint,omitempty"`
 }
 
 // RefShowParams asks about one thing: its Ref's kind, and its name as it
@@ -682,6 +788,10 @@ type Mission struct {
 	// Path is its page in ws's web UI: what a plugin's app opens with
 	// ws:open.
 	Path string `json:"path"`
+	// About is what it's about, by name: one of a plugin's things
+	// (RAM-123), a pull request, anything ws names. A plugin finds the
+	// missions about one of its things by it.
+	About []string `json:"about,omitempty"`
 }
 
 // Headline is a mission's one line of where it stands.

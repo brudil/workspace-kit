@@ -74,6 +74,7 @@ type Plugin struct {
 	routes      []route
 	syncs       []*syncer
 	refs        []*Ref
+	actions     []*Action
 	setups      []func()
 	onConfig    []func()
 	guide       string
@@ -267,6 +268,19 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 		p.running.Add(1)
 		defer p.running.Done()
 		return p.showRef(ctx, in)
+	case protocol.MethodActionRun:
+		var in protocol.ActionRunParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		return p.runAction(ctx, in)
 	case protocol.MethodShutdown:
 		// Commands being run get a moment to finish and be answered.
 		finished := make(chan struct{})
@@ -366,6 +380,9 @@ func (p *Plugin) prepare() (protocol.Registration, error) {
 	if _, errs := p.refsDeclared(); len(errs) > 0 {
 		p.declErrs = append(p.declErrs, errs...)
 	}
+	if _, err := p.actionsDeclared(); err != nil {
+		p.declErrs = append(p.declErrs, err)
+	}
 	if len(p.declErrs) > 0 {
 		return protocol.Registration{}, errors.Join(p.declErrs...)
 	}
@@ -393,6 +410,7 @@ func (p *Plugin) registration() protocol.Registration {
 		reg.Syncs = append(reg.Syncs, protocol.Sync{Name: s.name, Every: int(s.every / time.Second)})
 	}
 	reg.Refs, _ = p.refsDeclared()
+	reg.Actions, _ = p.actionsDeclared()
 	reg.Config = p.Config.spec()
 	return reg
 }

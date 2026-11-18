@@ -73,6 +73,14 @@ func TestHello(t *testing.T) {
 		t.Errorf("visits ws was told of: %+v", told)
 	}
 
+	// Something to do, from Find: it asks, then says.
+	if r, err := ws.Act("greet"); err != nil || r.Ask == nil || r.Ask.Type != protocol.AskText {
+		t.Errorf("greet, unanswered: %+v, %v", r, err)
+	}
+	if r, err := ws.Act("greet", "Ada"); err != nil || r.Say != "Hello, Ada" {
+		t.Errorf("greet, answered: %+v, %v", r, err)
+	}
+
 	// A change of config reaches the next read, with no restart, and the
 	// open app is told to ask again.
 	if err := ws.SetConfig(map[string]any{"greeting": "Howdy"}); err != nil {
