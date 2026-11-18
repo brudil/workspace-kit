@@ -536,6 +536,17 @@ func (ws *WS) SetConfig(values map[string]any) error {
 	return nil
 }
 
+// Look says who's looking at what the plugin shows, as ws does when it
+// changes, and returns once the plugin has taken it.
+func (ws *WS) Look(who plugin.Looking) error {
+	if err := ws.conn.Notify(protocol.MethodViewLooking, protocol.ViewLookingParams{App: who.App, WS: who.WS || who.App}); err != nil {
+		return err
+	}
+	// A request is answered only after what came before it was handled.
+	ws.conn.Call(context.Background(), "$/ping", nil, nil) //nolint:errcheck // nobody answers it: that's the point
+	return nil
+}
+
 // Notifications are the params of each notification of a method the
 // plugin has sent so far ("view/changed", "sync/state", "log", …).
 func (ws *WS) Notifications(method string) []json.RawMessage {

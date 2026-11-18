@@ -77,6 +77,7 @@ type Plugin struct {
 	actions     []*Action
 	setups      []func()
 	onConfig    []func()
+	onLooking   []func(Looking)
 	guide       string
 	guideSet    bool
 	roles       []string
@@ -93,6 +94,12 @@ type Plugin struct {
 	server   *http.Server
 	handler  http.Handler // the plugin's HTTP: its app's files and its handlers
 	ui       *protocol.UI // the app, as ws is told of it
+	looking  Looking      // who's looking, as ws last said
+
+	// The wall clock, and how often a resting sync looks at it: a test's
+	// to set.
+	now     func() time.Time
+	recheck time.Duration
 
 	running     sync.WaitGroup // commands being run
 	initialized chan struct{}  // closed once initialize has been answered for
@@ -112,6 +119,8 @@ func New(files fs.FS) *Plugin {
 		files:          files,
 		CommandTimeout: 2 * time.Minute,
 		SyncTimeout:    5 * time.Minute,
+		now:            func() time.Time { return time.Now().Round(0) }, // no monotonic reading: it stops while a machine sleeps
+		recheck:        time.Minute,
 		ctx:            ctx,
 		cancel:         cancel,
 		done:           make(chan struct{}),
@@ -142,6 +151,52 @@ func (p *Plugin) Setup(fn func()) {
 func (p *Plugin) OnConfig(fn func()) {
 	p.declaring("OnConfig")
 	p.onConfig = append(p.onConfig, fn)
+}
+
+// Looking is who's looking at what the plugin shows in ws's web UI, as ws
+// last said. ws says it and asks nothing by it: what a plugin fetches,
+// and when, is the plugin's to decide.
+type Looking struct {
+	// App: the plugin's app is on screen, in a page of ws's that's showing.
+	App bool
+	// WS: a page of ws's web UI is showing, whichever it is, so the
+	// plugin's sidebar entries and their badges are on screen. True
+	// whenever App is.
+	WS bool
+}
+
+// Looking is who's looking now. It's nobody until ws says otherwise, and
+// a ws from before it said never does.
+func (p *Plugin) Looking() Looking {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.looking
+}
+
+// OnLooking is run when who's looking changes, with who is now: for a
+// plugin that decides for itself what that's worth (a sync's WhileOpen
+// covers the usual case). Like any notification's, fn mustn't wait on
+// ws.
+func (p *Plugin) OnLooking(fn func(Looking)) {
+	p.declaring("OnLooking")
+	p.onLooking = append(p.onLooking, fn)
+}
+
+// looked takes who's looking, as ws said it: syncs work out again when
+// they're next due, and the plugin's own code is told.
+func (p *Plugin) looked(l Looking) {
+	l.WS = l.WS || l.App
+	p.mu.Lock()
+	was := p.looking
+	p.looking = l
+	p.mu.Unlock()
+	if was == l {
+		return
+	}
+	p.lookSyncs()
+	for _, fn := range p.onLooking {
+		p.guard("OnLooking", func() { fn(l) })
+	}
 }
 
 // Guide is what agents are told of the plugin: markdown, and the roles
@@ -240,6 +295,19 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 			return nil, err
 		}
 		p.configChanged(in.Config)
+		return nil, nil
+	case protocol.MethodViewLooking:
+		var in protocol.ViewLookingParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, err
+		}
+		// What's declared is all there once the plugin's ready.
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.looked(Looking{App: in.App, WS: in.WS})
 		return nil, nil
 	case protocol.MethodCommandRun:
 		var in protocol.CommandRunParams
@@ -407,7 +475,7 @@ func (p *Plugin) registration() protocol.Registration {
 		reg.Agent = &protocol.Agent{Roles: p.roles, Guide: p.guide}
 	}
 	for _, s := range p.syncs {
-		reg.Syncs = append(reg.Syncs, protocol.Sync{Name: s.name, Every: int(s.every / time.Second)})
+		reg.Syncs = append(reg.Syncs, protocol.Sync{Name: s.name, Every: int(s.every / time.Second), Open: int(s.open / time.Second)})
 	}
 	reg.Refs, _ = p.refsDeclared()
 	reg.Actions, _ = p.actionsDeclared()

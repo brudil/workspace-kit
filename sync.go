@@ -15,16 +15,30 @@ import (
 type syncer struct {
 	p     *Plugin
 	name  string
-	every time.Duration
+	every time.Duration // between runs: 0 is no interval of its own
+	open  time.Duration // between runs while the app's on screen: 0 is as every
 	fn    func(context.Context) error
 
 	mu       sync.Mutex
 	running  chan struct{} // closed when the run in flight ends
 	at       time.Time     // when it last succeeded
+	ran      time.Time     // when it last ended, however it went, by the wall clock
 	took     time.Duration
-	err      error // how the last run went
-	failures int   // in a row
-	wake     chan struct{}
+	err      error         // how the last run went
+	failures int           // in a row
+	wake     chan struct{} // config changed
+	look     chan struct{} // who's looking changed
+}
+
+// SyncOption says more of when a sync runs.
+type SyncOption func(*syncer)
+
+// WhileOpen is how often a sync runs while the plugin's app is on screen
+// (Looking().App), in place of its own interval. When the app comes on
+// screen, the sync runs at once if its last run is further back than
+// this, and otherwise when it is.
+func WhileOpen(every time.Duration) SyncOption {
+	return func(s *syncer) { s.open = every }
 }
 
 // SyncState is how a sync stands: for ws plugin list, and for a plugin
@@ -52,14 +66,28 @@ var retryAfter = 10 * time.Second
 // growing wait, and what was fetched before stays. It waits while
 // required config is missing. When it succeeds, the open app is told
 // (Changed).
-func (p *Plugin) Sync(name string, every time.Duration, fn func(ctx context.Context) error) {
+//
+// When it runs is the plugin's to say: ws tells a plugin who's looking
+// (Looking), and never asks for a run. An `every` of 0 is a sync with no
+// interval of its own, which runs at start, when asked, and as its
+// options say: with WhileOpen, only while the plugin's app is on screen.
+// A run is due by the wall clock, so a machine that's slept through one
+// runs it when it wakes.
+func (p *Plugin) Sync(name string, every time.Duration, fn func(ctx context.Context) error, opts ...SyncOption) {
 	p.declaring("Sync")
 	for _, was := range p.syncs {
 		if was.name == name {
 			p.declErrs = append(p.declErrs, fmt.Errorf("sync %q is declared twice", name))
 		}
 	}
-	p.syncs = append(p.syncs, &syncer{p: p, name: name, every: every, fn: fn, wake: make(chan struct{}, 1)})
+	s := &syncer{p: p, name: name, every: every, fn: fn, wake: make(chan struct{}, 1), look: make(chan struct{}, 1)}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.every < 0 || s.open < 0 {
+		p.declErrs = append(p.declErrs, fmt.Errorf("sync %q has an interval below 0", name))
+	}
+	p.syncs = append(p.syncs, s)
 }
 
 // startSyncs starts each sync's loop, once ws has the registration.
@@ -83,44 +111,87 @@ func (p *Plugin) wakeSyncs() {
 // came up.
 func (p *Plugin) ready() bool { return p.broken == nil && p.Config.complete() }
 
-// loop runs the sync at start and on its interval, until the plugin
-// stops.
+// lookSyncs has each sync work out again when it's next due: who's
+// looking changed.
+func (p *Plugin) lookSyncs() {
+	for _, s := range p.syncs {
+		select {
+		case s.look <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// loop runs the sync at start, and then whenever its next run is due,
+// until the plugin stops.
 func (s *syncer) loop() {
 	for {
-		var wait time.Duration // 0: until woken
 		if s.p.ready() {
-			wait = s.every
-			if err := s.run(s.p.ctx); err != nil {
-				s.mu.Lock()
-				n := s.failures
-				s.mu.Unlock()
-				wait = min(s.every, retryAfter<<min(n-1, 16))
-			}
-			wait += time.Duration(rand.Int64N(int64(wait)/10 + 1)) // so plugins don't all fetch at once
+			s.run(s.p.ctx) //nolint:errcheck // how it went is kept, and says how long it rests
 		}
-		if !s.sleep(wait) {
+		if !s.rest() {
 			return
 		}
 	}
 }
 
-// sleep waits for wait (or, given 0, until woken), and says whether the
-// plugin's still running. A change of config ends the wait early for a
-// sync that was waiting on config, or whose last run failed: the change
-// may be what it needed.
-func (s *syncer) sleep(wait time.Duration) bool {
-	var timer <-chan time.Time
-	if wait > 0 {
-		t := time.NewTimer(wait)
-		defer t.Stop()
-		timer = t.C
+// wait is how long the sync rests after a run: its interval, as who's
+// looking has it, or less after a failure. 0 is until something changes:
+// it has no interval as things stand, or config's missing.
+func (s *syncer) wait() time.Duration {
+	if !s.p.ready() {
+		return 0
 	}
+	every := s.every
+	if s.open > 0 && s.p.Looking().App {
+		every = s.open
+	}
+	s.mu.Lock()
+	n := s.failures
+	s.mu.Unlock()
+	if n > 0 {
+		every = min(every, retryAfter<<min(n-1, 16))
+	}
+	return every
+}
+
+// rest waits until the sync's next run is due, and says whether the
+// plugin's still running. How long that is follows who's looking, so
+// it's worked out again when ws says that's changed. It's counted from
+// the last run by the wall clock, which is looked at again every
+// recheck: a timer doesn't count the time a machine sleeps, and the
+// clock does. A change of config ends the wait early for a sync that was
+// waiting on config, or whose last run failed: the change may be what it
+// needed.
+func (s *syncer) rest() bool {
+	spread := rand.Float64() / 10 // so plugins don't all fetch at once
 	for {
+		wait := s.wait()
+		var timer *time.Timer
+		var due <-chan time.Time
+		if wait > 0 {
+			wait += time.Duration(float64(wait) * spread)
+			s.mu.Lock()
+			left := s.ran.Add(wait).Sub(s.p.now())
+			if left > wait {
+				// The clock's been put back to before the last run: the
+				// wait is counted from now, not made longer by it.
+				s.ran, left = s.p.now(), wait
+			}
+			s.mu.Unlock()
+			if left <= 0 {
+				return true
+			}
+			timer = time.NewTimer(min(left, s.p.recheck))
+			due = timer.C
+		}
+		again := false
 		select {
 		case <-s.p.ctx.Done():
-			return false
-		case <-timer:
-			return true
+		case <-due:
+			again = true
+		case <-s.look:
+			again = true
 		case <-s.wake:
 			s.mu.Lock()
 			failed := s.err != nil
@@ -128,6 +199,13 @@ func (s *syncer) sleep(wait time.Duration) bool {
 			if wait == 0 || failed {
 				return true
 			}
+			again = true
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		if !again {
+			return false
 		}
 	}
 }
@@ -163,7 +241,7 @@ func (s *syncer) run(ctx context.Context) error {
 	took := time.Since(start)
 
 	s.mu.Lock()
-	s.running, s.took, s.err = nil, took, err
+	s.running, s.took, s.err, s.ran = nil, took, err, s.p.now()
 	if err == nil {
 		s.at, s.failures = time.Now(), 0
 	} else {

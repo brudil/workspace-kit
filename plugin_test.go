@@ -774,6 +774,142 @@ func TestSyncWaitsForRequiredConfig(t *testing.T) {
 	}
 }
 
+// settled is how many times a sync has run once it's stopped running:
+// the count, after a moment in which it didn't move.
+func settled(runs *atomic.Int32) int32 {
+	for {
+		was := runs.Load()
+		time.Sleep(60 * time.Millisecond)
+		if runs.Load() == was {
+			return was
+		}
+	}
+}
+
+func TestASyncKeepsTheAppsPaceWhileItsOnScreen(t *testing.T) {
+	var runs atomic.Int32
+	var told []plugin.Looking
+	var mu sync.Mutex
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Sync("issues", time.Hour, func(context.Context) error { runs.Add(1); return nil }, plugin.WhileOpen(10*time.Millisecond))
+		p.OnLooking(func(l plugin.Looking) { mu.Lock(); told = append(told, l); mu.Unlock() })
+	})
+	if got := ws.Registration().Syncs; len(got) != 1 || got[0].Every != 3600 || got[0].Open != 0 {
+		// (An interval under a second is 0 in the registration, which is
+		// for show: nothing real syncs that often.)
+		t.Errorf("the sync, as registered: %+v", got)
+	}
+
+	// Nobody's looking: the hour is its interval.
+	ws.Wait(protocol.MethodSyncState, 1)
+	if n := settled(&runs); n != 1 {
+		t.Fatalf("with nobody looking, and an hour between syncs, it ran %d times", n)
+	}
+	if l := ws.Plugin().Looking(); l.App || l.WS {
+		t.Errorf("who's looking, before ws said: %+v", l)
+	}
+
+	// ws's web UI is showing, on another page: nothing of this sync's.
+	ws.Look(plugin.Looking{WS: true}) //nolint:errcheck // a pipe
+	if n := settled(&runs); n != 1 {
+		t.Errorf("with ws showing and the app not, it ran %d times", n)
+	}
+
+	// The app comes on screen: at once, as the last run's further back
+	// than the app's interval, and at that interval after.
+	ws.Look(plugin.Looking{App: true}) //nolint:errcheck // a pipe
+	if n := len(ws.Wait(protocol.MethodSyncState, 4)); n < 4 {
+		t.Fatalf("with the app on screen, and 10ms between syncs, it ran %d times in five seconds", n)
+	}
+	if l := ws.Plugin().Looking(); !l.App || !l.WS {
+		t.Errorf("who's looking, with the app on screen: %+v", l)
+	}
+
+	// And it's gone: the hour again.
+	ws.Look(plugin.Looking{}) //nolint:errcheck // a pipe
+	n := settled(&runs)
+	time.Sleep(100 * time.Millisecond)
+	if runs.Load() != n {
+		t.Errorf("with the app gone, it went on running: %d, then %d", n, runs.Load())
+	}
+
+	// The plugin's own code heard each change, once.
+	ws.Look(plugin.Looking{}) //nolint:errcheck // a pipe
+	mu.Lock()
+	defer mu.Unlock()
+	want := []plugin.Looking{{WS: true}, {App: true, WS: true}, {}}
+	if fmt.Sprint(told) != fmt.Sprint(want) {
+		t.Errorf("OnLooking was told %+v, not %+v", told, want)
+	}
+}
+
+func TestASyncWithNoIntervalRunsOnlyWhileTheAppsOnScreen(t *testing.T) {
+	var runs atomic.Int32
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Sync("issues", 0, func(context.Context) error { runs.Add(1); return nil }, plugin.WhileOpen(time.Hour))
+		p.Sync("board", 0, func(context.Context) error { return nil }, plugin.WhileOpen(10*time.Millisecond))
+	})
+	if got := ws.Registration().Syncs; len(got) != 2 || got[0].Every != 0 || got[0].Open != 3600 {
+		t.Errorf("the syncs, as registered: %+v", got)
+	}
+	// At start, as every sync does, and no more.
+	ws.Wait(protocol.MethodSyncState, 2)
+	if n := settled(&runs); n != 1 {
+		t.Fatalf("a sync with no interval ran %d times with nobody looking", n)
+	}
+	// The app comes on screen within its interval of the last run: not
+	// yet. The other, whose interval has passed, runs.
+	ws.Look(plugin.Looking{App: true}) //nolint:errcheck // a pipe
+	if n := len(ws.Wait(protocol.MethodSyncState, 4)); n < 4 {
+		t.Fatalf("the sync that was due didn't run when the app came on screen: %d sync/state", n)
+	}
+	if runs.Load() != 1 {
+		t.Errorf("a sync ran when the app came on screen, an hour before it was due: %d runs", runs.Load())
+	}
+	// Asked for, it runs whoever's looking.
+	ws.Look(plugin.Looking{}) //nolint:errcheck // a pipe
+	if got := ws.Run("sync", "issues"); got.Exit != 0 || runs.Load() != 2 {
+		t.Errorf("ws x sync issues: %+v, %d runs", got, runs.Load())
+	}
+}
+
+func TestASyncSleptThroughRunsWhenTheClockSaysItsDue(t *testing.T) {
+	var runs atomic.Int32
+	var ahead atomic.Int64 // how far the wall clock is ahead of the timers
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		plugin.SetClock(p, func() time.Time { return time.Now().Round(0).Add(time.Duration(ahead.Load())) }, 10*time.Millisecond)
+		p.Sync("issues", time.Hour, func(context.Context) error { runs.Add(1); return nil })
+	})
+	ws.Wait(protocol.MethodSyncState, 1)
+	if n := settled(&runs); n != 1 {
+		t.Fatalf("with an hour between syncs, it ran %d times", n)
+	}
+	// The machine sleeps for two hours: the clock moves, and no timer does.
+	ahead.Store(int64(2 * time.Hour))
+	if n := len(ws.Wait(protocol.MethodSyncState, 2)); n != 2 {
+		t.Fatalf("a sync two hours old, with an hour between syncs, wasn't run: %d runs", runs.Load())
+	}
+	// And the clock's put back to before that run: its next is an hour
+	// from now, not three.
+	ahead.Store(0)
+	if n := settled(&runs); n != 2 {
+		t.Errorf("after the clock was put back, it ran %d times", n)
+	}
+	ahead.Store(int64(time.Hour + 10*time.Minute)) // past the hour, and the tenth of it syncs are spread by
+	if n := len(ws.Wait(protocol.MethodSyncState, 3)); n != 3 {
+		t.Errorf("a clock put back made the wait longer: %d runs", runs.Load())
+	}
+}
+
+func TestASyncsIntervalCantBeBelowNothing(t *testing.T) {
+	_, err := plugintest.Start(nil, func(p *plugin.Plugin) {
+		p.Sync("issues", time.Minute, func(context.Context) error { return nil }, plugin.WhileOpen(-time.Second))
+	})
+	if err == nil || !strings.Contains(err.Error(), "below 0") {
+		t.Errorf("a sync with an interval below 0 was taken: %v", err)
+	}
+}
+
 // --- declaring ---
 
 func TestNothingIsDeclaredOnceRunning(t *testing.T) {
