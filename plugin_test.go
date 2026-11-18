@@ -2,6 +2,8 @@ package plugin_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,12 +23,25 @@ import (
 
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
+// The app as built, at its smallest: its entry and its stylesheet.
+const (
+	appJS  = `console.log("the app")`
+	appCSS = `main { color: var(--ws-fg) }`
+)
+
+// hashed is a file of the app's as the registration should name it.
+func hashed(name, content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "/ui/" + name + "?v=" + hex.EncodeToString(sum[:4])
+}
+
 // --- registration ---
 
 func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 	files := fstest.MapFS{
-		"agents.md":        file("Use `ws jira mine`.\n"),
-		"views/index.html": file("<h1>Issues</h1>"),
+		"agents.md":       file("Use `ws jira mine`.\n"),
+		"ui/dist/app.js":  file(appJS),
+		"ui/dist/app.css": file(appCSS),
 	}
 	ws := plugintest.New(t, files, func(p *plugin.Plugin) {
 		p.Describe("Jira issues beside your missions")
@@ -36,9 +51,9 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		p.Config.List("projects", "Projects to show", plugin.Default([]string{}))
 		p.Config.Enum("kind", "Kind", []string{"a", "b"}, plugin.Default("a"))
 		p.Config.String("email", "Your email", plugin.Local)
-		p.View("Jira", plugin.Icon("ticket"), plugin.Under("tasks"), func(v *plugin.View) {
-			v.Page("/", "index.html", func(*plugin.Request) (any, error) { return nil, nil })
-		})
+		p.UI("ui/dist")
+		p.View("Jira", plugin.Icon("ticket"), plugin.Under("tasks"))
+		p.View("Board", plugin.At("/board"))
 		p.Command("mine", "Issues assigned to you", func(*plugin.Call) error { return nil }).Args("[PROJECT]")
 		p.Sync("issues", 5*time.Minute, func(context.Context) error { return nil })
 		p.Guide("", "crew", "orchestrator")
@@ -46,7 +61,8 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 
 	got, _ := json.Marshal(ws.Registration())
 	want := `{"description":"Jira issues beside your missions",` +
-		`"views":[{"title":"Jira","icon":"ticket","under":"tasks","path":"/"}],` +
+		`"views":[{"title":"Jira","icon":"ticket","under":"tasks","path":"/"},{"title":"Board","path":"/board"}],` +
+		`"ui":{"script":"` + hashed("app.js", appJS) + `","style":"` + hashed("app.css", appCSS) + `"},` +
 		`"commands":{"name":"jira","short":"Jira issues beside your missions","subcommands":[` +
 		`{"name":"mine","short":"Issues assigned to you","args":"[PROJECT]"},` +
 		`{"name":"sync","short":"Fetch what's new now","args":"[NAME...]"}]},` +
@@ -65,24 +81,65 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 }
 
 func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
-	for name, setup := range map[string]func(p *plugin.Plugin){
-		"a template that isn't there": func(p *plugin.Plugin) {
-			p.View("X", func(v *plugin.View) {
-				v.Page("/", "missing.html", func(*plugin.Request) (any, error) { return nil, nil })
-			})
+	built := fstest.MapFS{"ui/dist/app.js": file(appJS)}
+	ok := func(http.ResponseWriter, *http.Request) {}
+	for name, tc := range map[string]struct {
+		files fstest.MapFS
+		setup func(p *plugin.Plugin)
+		why   string // what the plugin's author is told
+	}{
+		"a view and no app": {
+			setup: func(p *plugin.Plugin) { p.View("X") },
+			why:   `the view "X" has no app to show`,
 		},
-		"a command declared twice": func(p *plugin.Plugin) {
-			p.Command("a", "", func(*plugin.Call) error { return nil })
-			p.Command("a", "", func(*plugin.Call) error { return nil })
+		"an app that isn't built": {
+			files: fstest.MapFS{"ui/dist/app.css": file(appCSS)},
+			setup: func(p *plugin.Plugin) { p.UI("ui/dist"); p.View("X") },
+			why:   "ui/dist/app.js, isn't in the plugin's files",
 		},
-		"a config key declared twice": func(p *plugin.Plugin) {
-			p.Config.String("a", "A")
-			p.Config.Bool("a", "A")
+		"an app and no files": {
+			setup: func(p *plugin.Plugin) { p.UI("ui/dist") },
+			why:   "ui/dist/app.js, isn't in the plugin's files",
+		},
+		"two apps": {
+			files: built,
+			setup: func(p *plugin.Plugin) { p.UI("ui/dist"); p.UI("ui/dist") },
+			why:   "a plugin has one app",
+		},
+		"a view at a path that isn't one": {
+			files: built,
+			setup: func(p *plugin.Plugin) { p.UI("ui/dist"); p.View("X", plugin.At("board")) },
+			why:   `the view "X" opens at "board"`,
+		},
+		"two handlers on one path": {
+			setup: func(p *plugin.Plugin) { p.HandleFunc("GET /api/a", ok); p.HandleFunc("GET /api/a", ok) },
+			why:   "the plugin's HTTP",
+		},
+		"a command declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Command("a", "", func(*plugin.Call) error { return nil })
+				p.Command("a", "", func(*plugin.Call) error { return nil })
+			},
+			why: "declared twice",
+		},
+		"a config key declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Config.String("a", "A")
+				p.Config.Bool("a", "A")
+			},
+			why: "declared twice",
 		},
 	} {
-		if ws, err := plugintest.Start(fstest.MapFS{}, setup); err == nil {
+		files := tc.files
+		if files == nil {
+			files = fstest.MapFS{}
+		}
+		ws, err := plugintest.Start(files, tc.setup)
+		if err == nil {
 			ws.Close()
 			t.Errorf("a plugin with %s started", name)
+		} else if !strings.Contains(err.Error(), tc.why) {
+			t.Errorf("a plugin with %s didn't start, and didn't say why (%q): %v", name, tc.why, err)
 		}
 	}
 }
@@ -277,77 +334,121 @@ func TestACommandOutOfTimeSaysSo(t *testing.T) {
 
 func viewFiles() fstest.MapFS {
 	return fstest.MapFS{
-		"views/index.html": file(`<h1>{{.Greeting}}</h1><a href="{{url "/browse/PROJ-1"}}">one</a> {{pill "Done" "good"}} {{reltime .At}}`),
-		"views/issue.html": file(`{{define "title"}}{{.}} Token cache{{end}}<h1>{{.}}</h1>`),
-		"static/app.js":    file(`console.log("hi")`),
+		"ui/dist/app.js":        file(appJS),
+		"ui/dist/app.css":       file(appCSS),
+		"ui/dist/chunks/one.js": file(`export const one = 1`),
+		"ui/dist/logo.svg":      file(`<svg xmlns="http://www.w3.org/2000/svg"/>`),
+		"ui/src/main.ts":        file(`the app's source: not served`),
+		"agents.md":             file("not served either"),
 	}
 }
 
 func view(saved *[]string) func(p *plugin.Plugin) {
 	return func(p *plugin.Plugin) {
-		p.View("Jira", plugin.Icon("ticket"), func(v *plugin.View) {
-			v.Page("/", "index.html", func(*plugin.Request) (any, error) {
-				return map[string]any{"Greeting": "<Hello>", "At": time.Now().Add(-5 * time.Minute)}, nil
-			})
-			v.Page("/browse/{ref}", "issue.html", func(r *plugin.Request) (any, error) {
-				if r.PathValue("ref") == "BAD" {
-					return nil, errors.New("no such issue")
-				}
-				return r.PathValue("ref"), nil
-			})
-			v.Post("/save", func(r *plugin.Request) error {
-				*saved = append(*saved, r.FormValue("name"))
-				return nil
-			})
-			v.Handle("GET /api/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("pong")) }))
+		p.UI("ui/dist")
+		p.View("Jira", plugin.Icon("ticket"))
+		p.View("Board", plugin.At("/board"))
+		p.HandleFunc("GET /api/ping", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("pong")) })
+		p.HandleFunc("GET /api/issues/{key}", func(w http.ResponseWriter, r *http.Request) {
+			if r.PathValue("key") == "BAD" {
+				panic("no such issue")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"key": r.PathValue("key")}) //nolint:errcheck // a test's recorder
 		})
+		p.Handle("POST /api/save", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*saved = append(*saved, r.FormValue("name"))
+			w.WriteHeader(http.StatusNoContent)
+		}))
 	}
 }
 
-func TestPages(t *testing.T) {
+// A plugin's HTTP is its app's files and what its app asks it, and
+// nothing else: it serves no page.
+func TestTheAppsFilesAndItsAPI(t *testing.T) {
 	var saved []string
 	ws := plugintest.New(t, viewFiles(), view(&saved), plugintest.Name("jira"))
 
-	page := ws.Get("/")
-	for _, want := range []string{
-		`<base href="/plugins/jira/">`,
-		`<title>Jira</title>`,
-		`<link rel="stylesheet" href="/plugin-kit.css">`,
-		`<script src="/plugin-kit.js"></script>`,
-		`<h1>&lt;Hello&gt;</h1>`, // escaped, as html/template does
-		`<a href="/plugins/jira/browse/PROJ-1">one</a>`,
-		`<span class="pill pill-good">Done</span>`,
-		`5 minutes ago`,
+	ui := ws.Registration().UI
+	if ui == nil || ui.Script != hashed("app.js", appJS) || ui.Style != hashed("app.css", appCSS) {
+		t.Fatalf("the app as registered: %+v", ui)
+	}
+
+	// The app's files, as what they are, where the registration says.
+	for _, tc := range []struct{ path, kind, cache, body string }{
+		{ui.Script, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable", appJS},
+		{ui.Style, "text/css; charset=utf-8", "public, max-age=31536000, immutable", appCSS},
+		{"/ui/app.js", "text/javascript; charset=utf-8", "no-cache", appJS},
+		{"/ui/chunks/one.js", "text/javascript; charset=utf-8", "no-cache", `export const one = 1`},
+		{"/ui/logo.svg", "image/svg+xml", "no-cache", `<svg xmlns="http://www.w3.org/2000/svg"/>`},
 	} {
-		if !strings.Contains(page.Body, want) {
-			t.Errorf("the page lacks %s:\n%s", want, page.Body)
+		got := ws.Get(tc.path)
+		if got.Status != 200 || got.Header.Get("Content-Type") != tc.kind || got.Header.Get("Cache-Control") != tc.cache || got.Body != tc.body {
+			t.Errorf("GET %s: %d, %q, %q\n%s", tc.path, got.Status, got.Header.Get("Content-Type"), got.Header.Get("Cache-Control"), got.Body)
 		}
 	}
-	if page.Status != 200 {
-		t.Errorf("the page's status is %d", page.Status)
+
+	// Nothing else is there, and nothing is HTML: not a view's path (ws
+	// serves the page), not a folder of the app's, not the plugin's other
+	// files.
+	for _, path := range []string{"/", "/board", "/browse/PROJ-1", "/ui/", "/ui", "/ui/chunks/", "/ui/nope.js", "/ui/../agents.md", "/ui/../src/main.ts", "/agents.md", "/static/app.js"} {
+		got := ws.Get(path)
+		if got.Status != 404 || strings.Contains(got.Header.Get("Content-Type"), "html") || strings.Contains(got.Body, "<") {
+			t.Errorf("GET %s: %d, %q\n%s", path, got.Status, got.Header.Get("Content-Type"), got.Body)
+		}
 	}
 
-	issue := ws.Get("/browse/PROJ-1")
-	if !strings.Contains(issue.Body, "<title>PROJ-1 Token cache</title>") || !strings.Contains(issue.Body, "<h1>PROJ-1</h1>") {
-		t.Errorf("a page with a title of its own:\n%s", issue.Body)
+	// What the app asks the plugin.
+	if ping := ws.Get("/api/ping"); ping.Status != 200 || ping.Body != "pong" {
+		t.Errorf("a handler: %d %q", ping.Status, ping.Body)
+	}
+	if one := ws.Get("/api/issues/PROJ-1"); one.Status != 200 || strings.TrimSpace(one.Body) != `{"key":"PROJ-1"}` {
+		t.Errorf("a handler with a path's value: %d %q", one.Status, one.Body)
+	}
+	if post := ws.Post("/api/save", map[string][]string{"name": {"x"}}); post.Status != 204 || len(saved) != 1 || saved[0] != "x" {
+		t.Errorf("a POST: %d, saved %v", post.Status, saved)
+	}
+	if wrong := ws.Post("/api/ping", nil); wrong.Status != 405 {
+		t.Errorf("a POST to a GET's handler: %d", wrong.Status)
 	}
 
-	if bad := ws.Get("/browse/BAD"); bad.Status != 500 || !strings.Contains(bad.Body, "no such issue") || !strings.Contains(bad.Body, "plugin-kit.css") {
-		t.Errorf("a page whose handler failed: %d\n%s", bad.Status, bad.Body)
+	// A handler that panics answers 500 in plain text, and ws is told.
+	bad := ws.Get("/api/issues/BAD")
+	if bad.Status != 500 || !strings.Contains(bad.Body, "no such issue") || !strings.HasPrefix(bad.Header.Get("Content-Type"), "text/plain") {
+		t.Errorf("a handler that panicked: %d, %q\n%s", bad.Status, bad.Header.Get("Content-Type"), bad.Body)
 	}
-	if missing := ws.Get("/nope"); missing.Status != 404 || !strings.Contains(missing.Body, "nothing here") {
-		t.Errorf("a page that isn't there: %d\n%s", missing.Status, missing.Body)
+	if logs := ws.Logs(); len(logs) != 1 || logs[0].Level != "error" || !strings.Contains(logs[0].Message, "GET /api/issues/{key} panicked: no such issue") {
+		t.Errorf("ws wasn't told of the panic: %+v", logs)
 	}
-	if js := ws.Get("/static/app.js"); js.Status != 200 || js.Body != `console.log("hi")` {
-		t.Errorf("a static file: %d %q", js.Status, js.Body)
+}
+
+// An app needs no stylesheet, and a plugin needs no app: one with only
+// handlers serves them, and one with nothing serves nothing.
+func TestAnAppWithNoStylesheetAndAPluginWithNoApp(t *testing.T) {
+	bare := plugintest.New(t, fstest.MapFS{"web/app.js": file(appJS)}, func(p *plugin.Plugin) {
+		p.UI("web/")
+		p.View("X")
+	})
+	if ui := bare.Registration().UI; ui == nil || ui.Script != hashed("app.js", appJS) || ui.Style != "" {
+		t.Errorf("an app with no stylesheet: %+v", ui)
 	}
-	if ping := ws.Get("/api/ping"); ping.Body != "pong" {
-		t.Errorf("a handler of the plugin's own: %q", ping.Body)
+	if got := bare.Get("/ui/app.css"); got.Status != 404 {
+		t.Errorf("a stylesheet that isn't there: %d", got.Status)
 	}
 
-	post := ws.Post("/save", map[string][]string{"name": {"x"}, "next": {"/browse/PROJ-1"}})
-	if post.Status != 303 || post.Header.Get("Location") != "/plugins/jira/browse/PROJ-1" || len(saved) != 1 || saved[0] != "x" {
-		t.Errorf("a form: %d to %q, saved %v", post.Status, post.Header.Get("Location"), saved)
+	api := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.HandleFunc("POST /hooks/push", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	})
+	if reg := api.Registration(); reg.UI != nil || len(reg.Views) != 0 {
+		t.Errorf("a plugin with no app registered one: %+v", reg)
+	}
+	if got := api.Post("/hooks/push", nil); got.Status != 202 {
+		t.Errorf("a handler of a plugin with no app: %d", got.Status)
+	}
+
+	nothing := plugintest.New(t, nil, func(*plugin.Plugin) {})
+	if got := nothing.Get("/"); got.Status != 404 {
+		t.Errorf("a plugin that serves nothing: %d", got.Status)
 	}
 }
 
@@ -381,14 +482,21 @@ func visits(p *plugin.Plugin) {
 		}
 		return c.Say(strings.Repeat("x", n))
 	})
-	p.View("V", func(v *plugin.View) {
-		v.Page("/", "index.html", func(*plugin.Request) (any, error) { return nil, nil })
+	p.UI("ui/dist")
+	p.View("V")
+	p.HandleFunc("GET /api/visits", func(w http.ResponseWriter, r *http.Request) {
+		var n int
+		if err := p.DB().QueryRowContext(r.Context(), `select count(*) from visits`).Scan(&n); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]int{"visits": n}) //nolint:errcheck // a test's recorder
 	})
 }
 
 func TestMigrationsAreAppliedInOrderEachOnce(t *testing.T) {
 	files := fstest.MapFS{
-		"views/index.html":           file("ok"),
+		"ui/dist/app.js":             file(appJS),
 		"migrations/0001_visits.sql": file("create table visits (at integer not null);"),
 		"migrations/0002_who.sql":    file("alter table visits add column who text;\ncreate index visits_who on visits (who);"),
 		"migrations/notes.txt":       file("not a migration"),
@@ -400,6 +508,9 @@ func TestMigrationsAreAppliedInOrderEachOnce(t *testing.T) {
 	if got := ws.Run("visit"); got.Stdout != "xx\n" {
 		t.Fatalf("a second visit: %+v", got)
 	}
+	if got := ws.Get("/api/visits"); got.Status != 200 || strings.TrimSpace(got.Body) != `{"visits":2}` {
+		t.Errorf("the app's API, reading the database: %d %q", got.Status, got.Body)
+	}
 	if _, err := os.Stat(filepath.Join(ws.Data(), "plugin.db")); err != nil {
 		t.Errorf("the database isn't in the data folder: %v", err)
 	}
@@ -407,7 +518,7 @@ func TestMigrationsAreAppliedInOrderEachOnce(t *testing.T) {
 
 func TestAFailedMigrationStopsThePluginRunning(t *testing.T) {
 	files := fstest.MapFS{
-		"views/index.html":           file("ok"),
+		"ui/dist/app.js":             file(appJS),
 		"migrations/0001_visits.sql": file("create table visits (at integer not null);"),
 		"migrations/0002_bad.sql":    file("create table other (x integer);\nalter table nowhere add column y;"),
 	}
@@ -423,8 +534,13 @@ func TestAFailedMigrationStopsThePluginRunning(t *testing.T) {
 	if got := ws.Run("visit"); got.Exit != 1 || !strings.Contains(got.Stderr, "0002_bad.sql") {
 		t.Errorf("a command ran against a half-migrated database: %+v", got)
 	}
-	if page := ws.Get("/"); page.Status != 503 || !strings.Contains(page.Body, "0002_bad.sql") {
-		t.Errorf("a page was served from a half-migrated database: %d\n%s", page.Status, page.Body)
+	// The app still loads, and what it asks is answered with why not, in
+	// plain text.
+	if app := ws.Get(ws.Registration().UI.Script); app.Status != 200 {
+		t.Errorf("the app of a plugin with a bad migration: %d", app.Status)
+	}
+	if got := ws.Get("/api/visits"); got.Status != 503 || !strings.Contains(got.Body, "0002_bad.sql") || !strings.HasPrefix(got.Header.Get("Content-Type"), "text/plain") {
+		t.Errorf("a handler ran against a half-migrated database: %d, %q\n%s", got.Status, got.Header.Get("Content-Type"), got.Body)
 	}
 }
 
@@ -432,7 +548,7 @@ func TestAFailedMigrationStopsThePluginRunning(t *testing.T) {
 func TestTheDatabaseIsCopiedAsideBeforeAMigration(t *testing.T) {
 	dir := t.TempDir()
 	first := fstest.MapFS{
-		"views/index.html":           file("ok"),
+		"ui/dist/app.js":             file(appJS),
 		"migrations/0001_visits.sql": file("create table visits (at integer not null, who text);"),
 	}
 	ws := plugintest.New(t, first, visits, plugintest.Dir(dir))
@@ -443,7 +559,7 @@ func TestTheDatabaseIsCopiedAsideBeforeAMigration(t *testing.T) {
 	}
 
 	second := fstest.MapFS{
-		"views/index.html":           file("ok"),
+		"ui/dist/app.js":             file(appJS),
 		"migrations/0001_visits.sql": first["migrations/0001_visits.sql"],
 		"migrations/0002_index.sql":  file("create index visits_who on visits (who);"),
 	}
@@ -461,15 +577,12 @@ func TestTheDatabaseIsCopiedAsideBeforeAMigration(t *testing.T) {
 func TestSyncRunsAtStartAndOnDemandOneAtATime(t *testing.T) {
 	var runs atomic.Int32
 	release := make(chan struct{})
-	ws := plugintest.New(t, fstest.MapFS{"views/index.html": file("ok")}, func(p *plugin.Plugin) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
 		p.Sync("issues", time.Hour, func(context.Context) error {
 			if runs.Add(1) > 1 {
 				<-release
 			}
 			return nil
-		})
-		p.View("V", func(v *plugin.View) {
-			v.Page("/", "index.html", func(*plugin.Request) (any, error) { return nil, nil })
 		})
 	})
 
@@ -484,10 +597,10 @@ func TestSyncRunsAtStartAndOnDemandOneAtATime(t *testing.T) {
 		t.Errorf("sync/state: %+v", st)
 	}
 	if n := len(ws.Wait(protocol.MethodViewChanged, 1)); n != 1 {
-		t.Errorf("open pages weren't told after a sync: %d view/changed", n)
+		t.Errorf("the open app wasn't told after a sync: %d view/changed", n)
 	}
-	if page := ws.Get("/"); !strings.Contains(page.Body, "issues as of just now") || !strings.Contains(page.Body, `action="-/sync"`) {
-		t.Errorf("the page doesn't say when it was synced:\n%s", page.Body)
+	if states := ws.Plugin().SyncStates(); len(states) != 1 || states[0].Name != "issues" || states[0].At.IsZero() || states[0].Error != "" {
+		t.Errorf("how the sync stands, for a plugin's app to show: %+v", states)
 	}
 
 	// Asked for three times at once: one run, three answers.
@@ -512,9 +625,9 @@ func TestSyncRunsAtStartAndOnDemandOneAtATime(t *testing.T) {
 		}
 	}
 
-	// Refresh on a page.
-	if post := ws.Post("/-/sync", nil); post.Status != 303 || runs.Load() != 3 {
-		t.Errorf("Refresh: %d, %d runs", post.Status, runs.Load())
+	// Asked for by the plugin's own code: a handler its app posts to, say.
+	if err := ws.Plugin().SyncNow(context.Background()); err != nil || runs.Load() != 3 {
+		t.Errorf("SyncNow: %v, %d runs", err, runs.Load())
 	}
 }
 

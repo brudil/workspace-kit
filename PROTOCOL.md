@@ -4,6 +4,8 @@ How ws and a plugin talk. Version 1. The framework in this repo (`plugin`) speak
 
 This is what's built: where ws and this differ, one of them has a bug.
 
+It's the protocol of the plugin's process: the JSON-RPC between ws and the plugin, the plugin on disk and as it's published, and what it registers. A plugin's web UI is an app that ws shows in a page of its own, and how that app and ws talk is another protocol, the frame protocol, with versions of its own. It isn't here: it's [`ui-lib`'s `PROTOCOL.md`](https://github.com/withworkspace/ui-lib/blob/main/PROTOCOL.md). [The view](#the-view) says where the two meet.
+
 ## A plugin on disk
 
 ```
@@ -85,8 +87,8 @@ Always first, once.
 
 - `ws.executable` is ws's own program. A plugin reaches ws by running its commands, in the workspace's root: `<executable> show m12 -f llm`. ws's commands are its interface to a plugin as they are to anything else; there are no methods a plugin calls ws by yet.
 - `config` holds what's set, secrets included, by key. A key that isn't set is absent. Values are JSON: a string, a bool, a number, or an array of strings.
-- `view.listen` is a unix socket's path. A plugin with a view listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
-- `view.base` is the path the view is served under.
+- `view.listen` is a unix socket's path. A plugin that serves anything (its app's files, what its app asks it) listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
+- `view.base` is the path the plugin's HTTP is served under ([The view](#the-view)).
 
 The answer:
 
@@ -106,6 +108,7 @@ Every field is optional.
   "views": [
     { "title": "Jira", "icon": "ticket", "under": "tasks", "path": "/" }
   ],
+  "ui": { "script": "/ui/app.js?v=3f9c2a", "style": "/ui/app.css?v=3f9c2a" },
   "commands": {
     "name": "jira",
     "short": "Jira issues",
@@ -129,7 +132,11 @@ Every field is optional.
 }
 ```
 
-- `views[].path` is where in the plugin's view the entry opens. `icon` is one of ws's icon names; one it doesn't have is drawn as a default.
+- `views[].path` is where in the plugin's app the entry opens. `icon` is one of ws's icon names; one it doesn't have is drawn as a default.
+- `ui` is the plugin's app: what ws's page for the plugin loads ([The view](#the-view)). A plugin has one app, whatever views it has: each view is a place in it.
+  - `ui.script` is the app's entry, loaded as a module. A plugin with `views` has one. The plugin serves it as JavaScript (`text/javascript`).
+  - `ui.style` is optional: a stylesheet, loaded before the app. The plugin serves it as `text/css`.
+  - Both are paths in the plugin's own HTTP. Each starts with `/` (not `//`) and has no `..`. A query is kept as it's given, so a plugin can name what it built (`?v=<a hash of the file>`) and a browser asks again when it's built again.
 - `commands.name` is the word after `ws`. It defaults to the plugin's name.
 - `agent.roles` empty means every role.
 - `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
@@ -200,7 +207,7 @@ Sent before the command's answer, it's delivered before the command ends.
 {}
 ```
 
-What the view shows is stale. ws tells open pages of it, and the page's script reloads them.
+What the app shows is stale. ws tells the open app (`ws:changed`, in the frame protocol), which asks the plugin again.
 
 ### `view/badge` (notification)
 
@@ -220,29 +227,13 @@ A sync finished. For `ws plugin list`.
 
 ## The view
 
-ws proxies `GET|POST|… /plugins/<name>/<rest>` to the plugin's socket as `/<rest>`, with:
+A plugin's web UI is one client-side app. ws shows it at `/x/<name>/…` in a page of its own, the shell, which loads the app the registration's `ui` names, from the plugin's HTTP. A plugin serves no HTML: no page, and nothing at a view's `path`, where a 404 is what's expected. The shell, what the app is given, and the messages between the app and ws are the frame protocol, which has its own versions: [`ui-lib`'s `PROTOCOL.md`](https://github.com/withworkspace/ui-lib/blob/main/PROTOCOL.md). [`@withworkspace/ui-lib`](https://www.npmjs.com/package/@withworkspace/ui-lib) speaks it for a page.
+
+What's left here is the plugin's own HTTP: its app's files, and whatever its app asks it. ws proxies `GET|POST|… /plugins/<name>/<rest>` to the plugin's socket as `/<rest>`, with:
 
 - `X-Forwarded-Prefix: /plugins/<name>`
 - ws's own cookies removed
 
-The page is shown in an iframe at `/x/<name>/<rest>`, same-origin with ws. Everything after the plugin's name is the plugin's: it routes it, and says when there's nothing at a path. When ws's address moves within the plugin and the page didn't cause it, ws loads the page at the new path, unless the page routes itself (`ws:routing`, below). ws serves two files for it:
+`ui.script` and `ui.style` are loaded through it: `/ui/app.js` is asked for as `/plugins/<name>/ui/app.js`.
 
-- `/plugin-kit.js`: the page's side of the frame's messages, below
-- `/plugin-kit.css`: ws's look for a plugin's page
-
-### The frame's messages
-
-`window.postMessage`, each `{ "type": "ws:…", … }`.
-
-| Message | From | Fields | What it's for |
-|---|---|---|---|
-| `ws:ready` | page | `path`, `title` | The page loaded. `path` is its path without the base (`/browse/PROJ-1`), with its query. |
-| `ws:hello` | ws | `scheme` (`light` or `dark`), `vars` (CSS custom properties by name) | The answer to `ws:ready`: the theme |
-| `ws:theme` | ws | as `ws:hello` | The theme changed |
-| `ws:path` | page | `path` | The page moved without loading (its own routing) |
-| `ws:routing` | page | | The page routes itself: when ws's address moves within the plugin, tell it (`ws:navigate`), don't load it again. Said again each time the page loads. |
-| `ws:navigate` | ws | `path` | ws's address moved to this path in the plugin, without the page having said so (the sidebar, back and forward, a link in ws). Sent only to a page that said `ws:routing`; any other is loaded at the path. |
-| `ws:title` | page | `title` | The page's title |
-| `ws:open` | page | `path` | Go to a page of ws's |
-| `ws:key` | page | `key`, `meta`, `ctrl`, `shift`, `alt` | A key ws owns was pressed in the frame |
-| `ws:changed` | ws | | The plugin said `view/changed` |
+Before the frame protocol, a plugin served its own pages here, with ws's `/plugin-kit.js` and `/plugin-kit.css` in them. Both files are gone, and so is the table of the frame's messages that was in this section. A plugin with `views` and no `ui.script` is one from then: ws says it has no app to show.

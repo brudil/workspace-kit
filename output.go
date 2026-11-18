@@ -291,3 +291,38 @@ func markdownTable(cols []string, cells [][]string) string {
 	}
 	return b.String()
 }
+
+// relTime is a time as a person would say it: "2 minutes ago".
+func relTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	future := d < 0
+	if future {
+		d = -d
+	}
+	var s string
+	switch {
+	case d < 45*time.Second:
+		return "just now"
+	case d < 90*time.Second:
+		s = "a minute"
+	case d < time.Hour:
+		s = fmt.Sprintf("%d minutes", int(d.Minutes()+0.5))
+	case d < 90*time.Minute:
+		s = "an hour"
+	case d < 24*time.Hour:
+		s = fmt.Sprintf("%d hours", int(d.Hours()+0.5))
+	case d < 48*time.Hour:
+		s = "a day"
+	case d < 30*24*time.Hour:
+		s = fmt.Sprintf("%d days", int(d.Hours()/24+0.5))
+	default:
+		return t.Local().Format("2 Jan 2006")
+	}
+	if future {
+		return "in " + s
+	}
+	return s + " ago"
+}

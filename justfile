@@ -13,3 +13,12 @@ check:
     go vet ./...
     cd examples/hello && go vet ./...
     go build ./...
+
+# Build the example's app into examples/hello/ui/dist, which is committed:
+# Go alone builds the plugin. It needs Node and npm.
+ui:
+    cd examples/hello/ui && npm ci && npm run build
+
+# Fail if the example's committed app isn't what its source builds.
+ui-check: ui
+    git diff --exit-code -- examples/hello/ui/dist

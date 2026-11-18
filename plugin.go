@@ -4,16 +4,16 @@
 // process's stdin and stdout (see PROTOCOL.md). This package speaks for it,
 // so a plugin is what it declares and a call to Run:
 //
-//	//go:embed agents.md migrations views
+//	//go:embed agents.md migrations ui/dist
 //	var files embed.FS
 //
 //	func main() {
 //		p := plugin.New(files)
 //		greeting := p.Config.String("greeting", "Greeting", plugin.Default("Hello"))
-//		p.View("Hello", func(v *plugin.View) {
-//			v.Page("/", "index.html", func(r *plugin.Request) (any, error) {
-//				return map[string]any{"Greeting": greeting.Get()}, nil
-//			})
+//		p.UI("ui/dist")
+//		p.View("Hello", plugin.Icon("sparkle"))
+//		p.HandleFunc("GET /api/greeting", func(w http.ResponseWriter, r *http.Request) {
+//			json.NewEncoder(w).Encode(map[string]string{"greeting": greeting.Get()})
 //		})
 //		p.Command("say", "Says the greeting", func(c *plugin.Call) error {
 //			return c.Say(greeting.Get() + ", workspace")
@@ -23,6 +23,12 @@
 //
 // Declaring a thing and handling it are one call, and what ws is told the
 // plugin adds (its registration) is written from those calls.
+//
+// A plugin's web UI is one client-side app (UI), which ws shows in a page
+// of its own, at each of the plugin's views (View). The plugin serves the
+// app's built files and what the app asks it (Handle). The framework
+// renders no pages, and a plugin has no HTML: the app talks to ws with
+// @withworkspace/ui-lib, the page's side of the frame protocol.
 package plugin
 
 import (
@@ -54,9 +60,8 @@ type Plugin struct {
 	// warnings and errors to ws as well.
 	Log *slog.Logger
 	// CommandTimeout is how long a command may run (default 2 minutes);
-	// PageTimeout a page (30 seconds); SyncTimeout a sync (5 minutes).
+	// SyncTimeout a sync (5 minutes).
 	CommandTimeout time.Duration
-	PageTimeout    time.Duration
 	SyncTimeout    time.Duration
 
 	files fs.FS
@@ -65,6 +70,7 @@ type Plugin struct {
 	description string
 	commands    []*Command
 	views       []*View
+	uiDir       string // the folder of files that holds the app, as built
 	routes      []route
 	syncs       []*syncer
 	setups      []func()
@@ -83,8 +89,8 @@ type Plugin struct {
 	broken   error // why nothing can run: a migration failed
 	listener net.Listener
 	server   *http.Server
-	handler  http.Handler
-	pages    *pageSet
+	handler  http.Handler // the plugin's HTTP: its app's files and its handlers
+	ui       *protocol.UI // the app, as ws is told of it
 
 	running     sync.WaitGroup // commands being run
 	initialized chan struct{}  // closed once initialize has been answered for
@@ -95,7 +101,7 @@ type Plugin struct {
 	once   sync.Once
 }
 
-// New is a plugin whose files (agents.md, migrations/, views/, static/)
+// New is a plugin whose files (agents.md, migrations/, its app as built)
 // are in files: the plugin's folder, built into its executable with
 // go:embed. files may be nil for a plugin with none of them.
 func New(files fs.FS) *Plugin {
@@ -103,7 +109,6 @@ func New(files fs.FS) *Plugin {
 	p := &Plugin{
 		files:          files,
 		CommandTimeout: 2 * time.Minute,
-		PageTimeout:    30 * time.Second,
 		SyncTimeout:    5 * time.Minute,
 		ctx:            ctx,
 		cancel:         cancel,
@@ -200,7 +205,7 @@ func (p *Plugin) Serve(r io.Reader, w io.Writer) error {
 	return conn.Err()
 }
 
-// stop ends what the plugin holds: its handlers, its view, its database.
+// stop ends what the plugin holds: its handlers, its HTTP, its database.
 func (p *Plugin) stop() {
 	p.cancel()
 	p.mu.Lock()
@@ -262,7 +267,7 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 }
 
 // initialize takes what ws says of where the plugin is running, gets it
-// ready (its config-dependent declarations, its database, its view), and
+// ready (its config-dependent declarations, its database, its HTTP), and
 // answers with its registration.
 func (p *Plugin) initialize(in protocol.InitializeParams) (any, error) {
 	p.mu.Lock()
@@ -283,17 +288,17 @@ func (p *Plugin) initialize(in protocol.InitializeParams) (any, error) {
 		return nil, err
 	}
 	// The database, if the plugin has migrations. One that can't be
-	// brought forward stops everything but the registration: the view and
-	// commands say why.
+	// brought forward stops everything but the registration: commands and
+	// the plugin's handlers say why.
 	if p.hasMigrations() {
 		if _, err := p.openDB(); err != nil {
 			p.broken = err
 			p.Log.Error(err.Error())
 		}
 	}
-	if len(p.views) > 0 && in.View.Listen != "" {
+	if p.handler != nil && in.View.Listen != "" {
 		if err := p.listen(in.View.Listen); err != nil {
-			return nil, fmt.Errorf("listening for the view on %s: %w", in.View.Listen, err)
+			return nil, fmt.Errorf("listening on %s: %w", in.View.Listen, err)
 		}
 	}
 	return rpc.Then{
@@ -308,7 +313,7 @@ func (p *Plugin) initialize(in protocol.InitializeParams) (any, error) {
 func (p *Plugin) Registration() (protocol.Registration, error) { return p.prepare() }
 
 // prepare runs the Setups and builds what the declarations need (the
-// pages' templates), then closes declaring. It's run once.
+// plugin's HTTP), then closes declaring. It's run once.
 func (p *Plugin) prepare() (protocol.Registration, error) {
 	p.mu.Lock()
 	if p.started {
@@ -346,8 +351,9 @@ func (p *Plugin) prepare() (protocol.Registration, error) {
 func (p *Plugin) registration() protocol.Registration {
 	reg := protocol.Registration{Description: p.description, ConfigVersion: p.Config.version}
 	for _, v := range p.views {
-		reg.Views = append(reg.Views, protocol.View{Title: v.title, Icon: v.icon, Under: v.under, Path: v.path()})
+		reg.Views = append(reg.Views, protocol.View{Title: v.title, Icon: v.icon, Under: v.under, Path: v.path})
 	}
+	reg.UI = p.ui
 	if len(p.commands) > 0 {
 		cmds := &protocol.Commands{Name: p.info.Plugin.Name, Short: p.description}
 		for _, c := range p.commands {
@@ -379,7 +385,7 @@ func (p *Plugin) configChanged(values map[string]json.RawMessage) {
 		p.guard("OnConfig", fn)
 	}
 	p.wakeSyncs()
-	// What a page shows may well follow config: open ones look again.
+	// What the app shows may well follow config: an open one looks again.
 	p.Changed()
 }
 
@@ -393,6 +399,16 @@ func (p *Plugin) guard(what string, fn func()) {
 	fn()
 }
 
+// recovering runs fn, turning a panic into an error.
+func (p *Plugin) recovering(what string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%s panicked: %v", what, r)
+		}
+	}()
+	return fn()
+}
+
 // notify sends ws a notification, if there's a ws to send it to.
 func (p *Plugin) notify(method string, params any) {
 	p.mu.Lock()
@@ -403,8 +419,9 @@ func (p *Plugin) notify(method string, params any) {
 	}
 }
 
-// Changed tells ws that what the view shows is stale: open pages of it
-// are reloaded.
+// Changed tells ws that what the app shows is stale. ws tells the open
+// app (ws:changed: onChanged in @withworkspace/ui-lib), which fetches
+// what it shows again.
 func (p *Plugin) Changed() { p.notify(protocol.MethodViewChanged, struct{}{}) }
 
 // Badge sets the count beside a view's sidebar entry: the view whose
