@@ -107,6 +107,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `p.Log`, `p.Changed`, `p.Badge` | A log, telling the open app that what it shows is stale, the count in the sidebar. |
 | `p.Missions`, `p.Mission`, `p.Repos` | Asking ws what it knows, in the protocol's types: the workspace's missions (where each stands, whose move it is, its capsules and pull requests), one with its brief and plan, and its repos with their capsules. `ErrNotFound` for a mission that isn't there, `ErrUnsupported` from a ws too old to answer. |
 | `p.Show`, `p.ShowIn` | One of the workspace's things as `ws show` shows it, as data: what it is, what it links to, and what points at it from elsewhere (`Said`: the missions about one of the plugin's things, the conversations that name it), each with its page in ws. Each link and each thing said is asked for in turn. `ShowIn` is one of a mission's own (`t3`, `d1`). |
+| `p.StartConversation` | Starts one of the workspace's conversations for the person, with what they say first as the plugin words it, and has its agent answer: how the app hands something on to ws to be talked over, and made a mission of there. It returns the conversation's page, for the app to open. |
 | `p.Ref`, with `.Prefix`, `.Address`, `.Opens`, `.Icon` | A kind of thing the plugin has that words name (`RAM-123`). ws finds the names wherever they're written and links them. Declared in `p.Setup` when the prefixes follow config. |
 | `.Fields`, with `plugin.Title`, `State`, `Text`, `Time`, `Markdown` | What one of the kind's things is made of: a thing is a value for each. |
 | `.Search`, with `plugin.All`, `Upto` | What one is found by, and how much of each field. ws makes the words it looks through, and makes them again when this changes. |
@@ -117,7 +118,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `.Show` | One thing, as it is now: for one ws wasn't told of, and for `ws show RAM-123`. `ErrNotFound` for a name the plugin has nothing by. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Conversations()` has it start the conversations asked for and says what each was started with, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
 
 ## A plugin's folder
 

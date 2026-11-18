@@ -962,6 +962,13 @@ func TestAskingWS(t *testing.T) {
 			}
 			return nil
 		}).Args("REF").Option("mission", "the mission it's one of")
+		p.Command("talk", "", func(c *plugin.Call) error {
+			started, err := p.StartConversation(c.Context(), c.Arg(0))
+			if err != nil {
+				return err
+			}
+			return c.Say(started.ID + " " + started.Path)
+		}).Args("MESSAGE")
 		p.Command("repos", "", func(c *plugin.Call) error {
 			rs, err := p.Repos(c.Context())
 			if err != nil {
@@ -980,6 +987,9 @@ func TestAskingWS(t *testing.T) {
 	}
 	if got := ws.Run("said", "RAM-1"); got.Exit == 0 || !strings.Contains(got.Stderr, "update ws") {
 		t.Errorf("showing in a ws that can't answer: %+v", got)
+	}
+	if got := ws.Run("talk", "Let's talk"); got.Exit == 0 || !strings.Contains(got.Stderr, "update ws") {
+		t.Errorf("a conversation in a ws that can't start one: %+v", got)
 	}
 
 	ws.Missions(
@@ -1026,6 +1036,22 @@ func TestAskingWS(t *testing.T) {
 	}
 	if got := ws.Run("said", "d2"); got.Stdout != "none\n" {
 		t.Errorf("a mission's thing asked for without its mission: %+v", got)
+	}
+
+	// A conversation, started with what the person says first: the
+	// stand-in names each in turn, and has what each was started with.
+	started := ws.Conversations()
+	if got := ws.Run("talk", "Let's work out a mission for RAM-1."); got.Stdout != "w1 /conversations/w1\n" {
+		t.Errorf("a conversation started: %+v", got)
+	}
+	if got := ws.Run("talk", "And RAM-2."); got.Stdout != "w2 /conversations/w2\n" {
+		t.Errorf("a second conversation: %+v", got)
+	}
+	if got := ws.Run("talk", " "); got.Exit == 0 {
+		t.Errorf("a conversation with nothing said: %+v", got)
+	}
+	if got := started(); len(got) != 2 || got[0] != "Let's work out a mission for RAM-1." || got[1] != "And RAM-2." {
+		t.Errorf("started with: %q", got)
 	}
 }
 

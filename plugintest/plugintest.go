@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -318,6 +319,33 @@ func (ws *WS) Shows(shown ...protocol.Shown) {
 		}
 		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has nothing called " + in.Ref}
 	})
+}
+
+// Conversations has the stand-in start the conversations the plugin
+// asks for (p.StartConversation), w1 then w2 and so on, and returns what
+// each was started with, in turn.
+func (ws *WS) Conversations() func() []string {
+	var mu sync.Mutex
+	var started []string
+	ws.Answer(protocol.MethodConversationStart, func(params json.RawMessage) (any, error) {
+		var in protocol.ConversationStartParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		if strings.TrimSpace(in.Message) == "" {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: "say something"}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		started = append(started, in.Message)
+		id := "w" + strconv.Itoa(len(started))
+		return protocol.ConversationStarted{ID: id, Path: "/conversations/" + id}, nil
+	})
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), started...)
+	}
 }
 
 // Repos are the repos the stand-in has: what it answers p.Repos with.

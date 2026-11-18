@@ -676,6 +676,12 @@ const (
 	MethodShow        = "show"         // ShowParams → Shown
 )
 
+// What a plugin has ws do, for the person who's using it: a request,
+// answered, and an addition to version 1.
+const (
+	MethodConversationStart = "conversation/start" // ConversationStartParams → ConversationStarted
+)
+
 // What a plugin tells ws of its things, so ws has them without asking:
 // requests, each answered, and each an addition to version 1. ws keeps
 // what it's told under the plugin, and forgets it when the plugin's
@@ -963,4 +969,21 @@ type Said struct {
 	At    time.Time `json:"at,omitzero"`
 	// Path is its page in ws's web UI, where it has one.
 	Path string `json:"path,omitempty"`
+}
+
+// ConversationStartParams is what a conversation is started with: what
+// the person says first, as the plugin words it for them. What it names
+// as ws names things (RAM-123) is read as that thing, so the
+// conversation's agent can read it, and the thing says the conversation
+// names it.
+type ConversationStartParams struct {
+	Message string `json:"message"`
+}
+
+// ConversationStarted is a conversation ws has started: one of the
+// workspace's (w4), whose agent is answering, and its page in ws's web
+// UI.
+type ConversationStarted struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
 }

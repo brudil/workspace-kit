@@ -14,7 +14,8 @@ import (
 )
 
 // A plugin asks ws what it knows over the connection they share, and gets
-// it in the protocol's types: p.Missions, p.Mission, p.Repos, p.Show. What ws
+// it in the protocol's types: p.Missions, p.Mission, p.Repos, p.Show, and
+// has it start a conversation (p.StartConversation). What ws
 // doesn't answer that way yet, a plugin can run a ws command for (p.WS):
 // ws says where its program is when the plugin starts.
 
@@ -68,6 +69,25 @@ func (p *Plugin) Show(ctx context.Context, ref string) (protocol.Shown, error) {
 func (p *Plugin) ShowIn(ctx context.Context, mission, ref string) (protocol.Shown, error) {
 	var out protocol.Shown
 	err := p.ask(ctx, protocol.MethodShow, protocol.ShowParams{Ref: ref, Mission: mission}, &out)
+	return out, err
+}
+
+// StartConversation starts one of the workspace's conversations for the
+// person using the plugin, with message as what they say first, and has
+// its agent answer. It's how a plugin's app hands something on to ws to
+// be talked over, and from there made a mission of: the agent reads what
+// the message names (RAM-123) with ws show, and proposes what the
+// conversation comes to, for the person to accept. What's returned is the
+// conversation and its page, for the app to open.
+//
+//	c, err := p.StartConversation(ctx, "Let's work out a mission for RAM-123.")
+//
+// It sends a message as the person, so it's for something they've asked
+// for (a button they pressed), not for the plugin's own account: ws
+// records that the plugin started it.
+func (p *Plugin) StartConversation(ctx context.Context, message string) (protocol.ConversationStarted, error) {
+	var out protocol.ConversationStarted
+	err := p.ask(ctx, protocol.MethodConversationStart, protocol.ConversationStartParams{Message: message}, &out)
 	return out, err
 }
 

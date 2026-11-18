@@ -394,7 +394,7 @@ A sync finished. For `ws plugin list`.
 
 ## Asking ws
 
-Requests from the plugin, each answered by ws in these types. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
+Requests from the plugin, each answered by ws in these types: what ws knows, and, last, one thing ws does for the person. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
 
 A plugin may ask once it has answered `initialize`.
 
@@ -509,6 +509,24 @@ One of the workspace's things as `ws show` shows it: what it is, what it links t
 - ws says what it has linked. Something written in a brief or a document that only names a thing isn't linked yet, so isn't in `said`.
 
 Nothing by that name is `-32001`.
+
+### `conversation/start` (request)
+
+```json
+{ "message": "Let's work out a mission for RAM-123." }
+```
+
+Starts one of the workspace's conversations for the person using the plugin, with `message` as what they say first, and has its agent answer. It's how a plugin's app hands something on to ws to be talked over: the agent reads what the message names (`RAM-123`) with `ws show`, and proposes what the conversation comes to (a mission, a decision), for the person to accept there.
+
+```json
+{ "id": "w4", "path": "/conversations/w4" }
+```
+
+- `id` is the conversation, as `show` names it, and `path` its page in ws's web UI: what the plugin's app opens with `ws:open`.
+- What the message names as ws names things is linked: `show` of the thing says the conversation mentions it.
+- The message is sent as the person, and an agent answers it, so this is for something they asked for (a button they pressed), not for the plugin's own account. ws records which plugin started the conversation, and says so on it.
+
+An empty `message` is `-32602`.
 
 ## Telling ws of things
 
