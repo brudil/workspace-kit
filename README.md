@@ -106,9 +106,10 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `p.Log`, `p.Changed`, `p.Badge` | A log, telling the open app that what it shows is stale, the count in the sidebar. |
 | `p.Missions`, `p.Mission`, `p.Repos` | Asking ws what it knows, in the protocol's types: the workspace's missions (where each stands, whose move it is, its capsules and pull requests), one with its brief and plan, and its repos with their capsules. `ErrNotFound` for a mission that isn't there, `ErrUnsupported` from a ws too old to answer. |
 | `p.Ref`, with `.Prefix`, `.Address`, `.Opens`, `.Icon` | A kind of thing the plugin has that words name (`RAM-123`), and what answers for one. ws finds the names wherever they're written, links them, and asks the plugin what one is for `ws show RAM-123` and the card under a name. Declared in `p.Setup` when the prefixes follow config. `ErrNotFound` for a name the plugin has nothing by. |
+| `ref.Mirror`, `ref.Put`, `ref.Remove` | Telling ws of the things the plugin has, so ws finds them by what they say (`ws find`, Find in the web UI) and draws them without asking. `Mirror` is all of a kind, from a sync: what's gone is forgotten. ws keeps them under the plugin, and forgets them when it's removed. What ws wouldn't keep is a `*Refused`. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, and `ws.Show(kind, name, full)` asks the plugin what one of its things is. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, and `ws.Things(kind)` is what it's told ws of. |
 
 ## A plugin's folder
 
@@ -175,4 +176,4 @@ The framework is before 1.0, so a change that breaks plugins is a minor version.
 
 ## Not here yet
 
-Things in ws's graph, palette actions, events and an HTTP client.
+Links between a plugin's things and ws's (a mission for an issue), palette actions, events and an HTTP client.

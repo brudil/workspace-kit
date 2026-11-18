@@ -61,19 +61,10 @@ func setup(p *plugin.Plugin) {
 	}
 	p.HandleFunc("GET /api/hello", hello)
 
-	// Each look at the app is counted: it posts here as it loads.
-	p.HandleFunc("POST /api/visits", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := p.DB().ExecContext(r.Context(), `insert into visits values (unixepoch())`); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		hello(w, r)
-	})
-
 	// VISIT-3 is the third look at the app. ws finds a name like it
 	// wherever it's written (a brief, a conversation), and asks here what
 	// one is: for ws show VISIT-3, and the card under the name.
-	p.Ref("visit", "Visit", func(ctx context.Context, a plugin.Asked) (plugin.Shown, error) {
+	visit := p.Ref("visit", "Visit", func(ctx context.Context, a plugin.Asked) (plugin.Shown, error) {
 		n, _ := strconv.Atoi(strings.TrimPrefix(a.Name, "VISIT-"))
 		var at int64
 		err := p.DB().QueryRowContext(ctx, `select at from visits order by rowid limit 1 offset ?`, n-1).Scan(&at)
@@ -90,6 +81,28 @@ func setup(p *plugin.Plugin) {
 			Markdown: "The app was looked at on " + when + ", and said: " + greeting.Get() + ".",
 		}, nil
 	}).Prefix("VISIT-")
+
+	// Each look at the app is counted: it posts here as it loads. ws is
+	// told of the visit, so it's found there by what it says (Find, ws
+	// find) without the plugin being asked. A plugin with more to tell
+	// does it from its sync, all at once: visit.Mirror.
+	p.HandleFunc("POST /api/visits", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := p.DB().ExecContext(r.Context(), `insert into visits values (unixepoch())`); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if n, err := visits(r.Context()); err == nil {
+			now := time.Now()
+			err := visit.Put(r.Context(), plugin.Thing{
+				Name: "VISIT-" + strconv.Itoa(n), Title: "Visit " + strconv.Itoa(n), Changed: now,
+				Text: "The app was looked at on " + now.UTC().Format("2 January 2006") + ".",
+			})
+			if err != nil && !errors.Is(err, plugin.ErrUnsupported) { // an older ws finds none of them
+				p.Log.Warn("telling ws of a visit: " + err.Error())
+			}
+		}
+		hello(w, r)
+	})
 
 	// ws hello say
 	p.Command("say", "Says the greeting", func(c *plugin.Call) error {

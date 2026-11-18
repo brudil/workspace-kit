@@ -92,3 +92,21 @@ func TestARefsProblem(t *testing.T) {
 		}
 	}
 }
+
+func TestARefNamesItsPrefixesAndANumber(t *testing.T) {
+	r := protocol.Ref{Kind: "issue", Prefixes: []string{"RAM-", "RAP-"}}
+	for _, name := range []string{"RAM-1", "RAP-123456789"} {
+		if !r.Names(name) {
+			t.Errorf("%s isn't one of its names", name)
+		}
+	}
+	for _, name := range []string{"", "RAM-", "RAM-0", "RAM-01", "ram-1", "XRAM-1", "RAM-1x", "RAM-1234567890", "RAM-1 ", "SPRINT-1"} {
+		if r.Names(name) {
+			t.Errorf("%q is one of its names", name)
+		}
+	}
+	r.Tail = "hex"
+	if r.Names("RAM-1") {
+		t.Error("a kind whose tail isn't known names RAM-1")
+	}
+}

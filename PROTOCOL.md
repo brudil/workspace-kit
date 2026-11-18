@@ -164,7 +164,7 @@ Every field is optional.
 - `syncs` is for show (`ws plugin list`); ws doesn't run them.
 - `refs` are how the plugin's things are named: [Refs](#refs).
 
-Not built yet, and ignored if sent: `events`, `actions`, `things`.
+Not built yet, and ignored if sent: `events`, `actions`.
 
 ### Refs
 
@@ -183,6 +183,7 @@ What ws does with them:
 - **It keeps them, by the plugin that registered them,** in the workspace's records, in place of what that plugin registered before. Names are found from there, whether the plugin's running or not, and removing the plugin forgets them.
 - **A prefix is the first plugin's to register it.** A second plugin's ref names by its other prefixes, and `ws plugin list` says what was left out. So is a ref that breaks the rules above: the rest of the registration stands.
 - **It asks the plugin** what a thing is when one is shown: `ws show RAM-123`, and the card under a name in the web UI.
+- **It keeps the things the plugin tells it of** ([Telling ws of things](#telling-ws-of-things)), so it finds them by what they say and draws them without asking.
 
 ### `config/changed` (notification)
 
@@ -366,6 +367,62 @@ No params. The workspace's repos, in ws's order:
 
 - `title` is what ws calls it: its name, when ws.toml gives it no other.
 - A capsule's `mission` is the slug of the mission in play that works in it. `ground` is the repo's default branch, which work starts from.
+
+## Telling ws of things
+
+Requests from the plugin, each answered, each added within version 1. A plugin tells ws of the things it has, so ws has them without asking: they're found by what they say (`ws find`, Find in the web UI), with the plugin's other things and ws's own, whether the plugin's running or not. What a thing is in full, the plugin still says when it's shown ([`ref/show`](#refshow-request)).
+
+A thing is named by one of the plugin's [refs](#refs): its `kind` is the ref's, and its `ref` one of that kind's names, as ws took them. ws keeps no thing it couldn't name. It keeps each under the plugin that told it, and forgets them when the plugin's removed, or when the plugin registers refs that name them no more.
+
+### `thing/put` (request)
+
+```json
+{
+  "things": [
+    { "kind": "issue", "ref": "RAM-123", "title": "Token refresh is flaky",
+      "state": "In Progress", "changed": "2026-11-18T10:42:00Z",
+      "text": "The clock should be injected…" }
+  ]
+}
+```
+
+Each is kept, in place of what ws had by that name. One that's as ws has it already isn't written again, so telling ws of everything after each sync costs little.
+
+- `title` is what it's called: a line. A thing with none isn't kept.
+- `state` is where it stands, in the plugin's words.
+- `changed` is when it last changed, RFC 3339, where the plugin knows.
+- `text` is what it says, as markdown or plain words, to be found by. ws keeps the first 20,000 bytes.
+- Up to 500 things in one request. More is refused whole (`-32602`): send them in turn.
+
+The answer says which weren't kept, and why. The rest were.
+
+```json
+{ "refused": [ { "kind": "issue", "ref": "ram-12", "why": "it isn't one of issue's names, as ws keeps them" } ] }
+```
+
+A thing is refused when its kind isn't a ref ws took from this plugin, its name isn't one of that kind's, it has no title, or ws has something of its own by that name.
+
+### `thing/remove` (request)
+
+```json
+{ "kind": "issue", "refs": ["RAM-123", "RAM-124"] }
+```
+
+ws forgets them. One it doesn't have is nothing to forget. The answer is `{}`.
+
+### `thing/list` (request)
+
+```json
+{ "kind": "issue" }
+```
+
+The names of the things of that kind ws has from this plugin, in order:
+
+```json
+{ "refs": ["RAM-123", "RAM-124"] }
+```
+
+It's how a plugin tells ws of all it has: put them, and remove what's listed and not among them. The framework's `Mirror` does.
 
 ## The view
 

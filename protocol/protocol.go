@@ -250,6 +250,23 @@ var (
 	refPrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,30}-$`)
 )
 
+var tailNumber = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+
+// Names says whether name is one of this kind's: one of its prefixes and
+// its tail, whole and as written. A kind whose tail this release doesn't
+// know names nothing.
+func (r Ref) Names(name string) bool {
+	if r.Tail != "" && r.Tail != TailNumber {
+		return false
+	}
+	for _, p := range r.Prefixes {
+		if tail, ok := strings.CutPrefix(name, p); ok && tailNumber.MatchString(tail) {
+			return true
+		}
+	}
+	return false
+}
+
 // Problem says what's wrong with a ref as it's registered, or "": ws
 // leaves out one with a problem, and the framework won't declare it.
 func (r Ref) Problem() string {
@@ -413,6 +430,78 @@ const (
 	MethodMissionShow = "mission/show" // MissionShowParams → MissionDetail
 	MethodRepoList    = "repo/list"    // nothing → RepoListResult
 )
+
+// What a plugin tells ws of its things, so ws has them without asking:
+// requests, each answered, and each an addition to version 1. ws keeps
+// what it's told under the plugin, and forgets it when the plugin's
+// removed.
+const (
+	MethodThingPut    = "thing/put"    // ThingPutParams → ThingPutResult
+	MethodThingRemove = "thing/remove" // ThingRemoveParams → nothing
+	MethodThingList   = "thing/list"   // ThingListParams → ThingListResult
+)
+
+// ThingsAtOnce is how many things one thing/put may hold: more is refused
+// whole (CodeInvalidParams), so a plugin with more sends them in turn.
+const ThingsAtOnce = 500
+
+// Thing is one of the plugin's things, as ws keeps it: found by what it
+// says (ws find, the web UI's Find) and drawn without asking the plugin.
+// What it is in full, the plugin still says when it's shown (ref/show).
+type Thing struct {
+	// Kind is the Ref it's named by, and Ref its name: one of that
+	// kind's, as the plugin registered them. ws keeps no thing it
+	// couldn't name.
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+	// Title is what it's called. A thing with none isn't kept.
+	Title string `json:"title"`
+	// State is where it stands, in the plugin's words: In Progress.
+	State string `json:"state,omitempty"`
+	// Changed is when it last changed, where the plugin knows: of two
+	// found alike, the newer is first.
+	Changed time.Time `json:"changed,omitzero"`
+	// Text is what it says, as markdown or plain words, to be found by:
+	// its description, what's been said on it. ws keeps the start of a
+	// long one.
+	Text string `json:"text,omitempty"`
+}
+
+// ThingPutParams are things to keep: each added, or put in place of what
+// ws had by that name.
+type ThingPutParams struct {
+	Things []Thing `json:"things"`
+}
+
+// ThingPutResult says which weren't kept, and why. The rest were.
+type ThingPutResult struct {
+	Refused []ThingRefused `json:"refused,omitempty"`
+}
+
+// ThingRefused is a thing ws didn't keep: its name isn't one of that
+// kind's, it has no title, or ws has something of its own by that name.
+type ThingRefused struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+	Why  string `json:"why"`
+}
+
+// ThingRemoveParams are things of a kind to forget, by name. One ws
+// doesn't have is nothing to forget.
+type ThingRemoveParams struct {
+	Kind string   `json:"kind"`
+	Refs []string `json:"refs"`
+}
+
+// ThingListParams asks which things of a kind ws has from this plugin.
+type ThingListParams struct {
+	Kind string `json:"kind"`
+}
+
+// ThingListResult is their names, in order.
+type ThingListResult struct {
+	Refs []string `json:"refs"`
+}
 
 // CodeNotFound is the answer for something asked for by name that isn't
 // there: ws's for a mission with no such slug, a plugin's for a ref it has

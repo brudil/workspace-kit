@@ -864,6 +864,75 @@ func TestRefsFollowConfig(t *testing.T) {
 	}
 }
 
+// A plugin tells ws of its things, so ws has them without asking: all of
+// a kind at once (what's gone is forgotten), or some.
+func TestAPluginTellsWSOfItsThings(t *testing.T) {
+	var issue *plugin.Ref
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		issue = p.Ref("issue", "Jira issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).Prefix("RAM-")
+	})
+	ctx := context.Background()
+	names := func() string {
+		var out []string
+		for _, th := range ws.Things("issue") {
+			out = append(out, th.Ref+"="+th.Title)
+		}
+		return strings.Join(out, " ")
+	}
+	when := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+
+	if err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-1", Title: "One", State: "Open", Changed: when, Text: "The first."}, {Name: "RAM-2", Title: "Two"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-1=One RAM-2=Two" {
+		t.Errorf("mirrored: %s", got)
+	}
+	if th := ws.Things("issue")[0]; th.Kind != "issue" || th.State != "Open" || !th.Changed.Equal(when) || th.Text != "The first." {
+		t.Errorf("RAM-1 as ws has it: %+v", th)
+	}
+	// All of them again: what's changed is put in place, and what's gone
+	// is forgotten.
+	if err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-2", Title: "Two, renamed"}, {Name: "RAM-3", Title: "Three"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-2=Two, renamed RAM-3=Three" {
+		t.Errorf("mirrored again: %s", got)
+	}
+	// Some: the rest stay.
+	if err := issue.Put(ctx, plugin.Thing{Name: "RAM-4", Title: "Four"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := issue.Remove(ctx, "RAM-2", "RAM-9"); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-3=Three RAM-4=Four" {
+		t.Errorf("after a put and a remove: %s", got)
+	}
+	// What ws won't keep is said, and the rest is kept.
+	err := issue.Mirror(ctx, []plugin.Thing{{Name: "RAM-3", Title: "Three"}, {Name: "ram-5", Title: "Five"}, {Name: "RAM-6"}})
+	var refused *plugin.Refused
+	if !errors.As(err, &refused) || len(refused.Things) != 2 || !strings.Contains(err.Error(), "ram-5: it isn't one of issue's names") || !strings.Contains(err.Error(), "RAM-6: it has no title") {
+		t.Errorf("refused: %v", err)
+	}
+	if got := names(); got != "RAM-3=Three" {
+		t.Errorf("after a mirror with some refused: %s", got)
+	}
+	// More than ws takes at once goes in turn.
+	many := make([]plugin.Thing, protocol.ThingsAtOnce+7)
+	for i := range many {
+		many[i] = plugin.Thing{Name: fmt.Sprintf("RAM-%d", i+1), Title: "One of many"}
+	}
+	if err := issue.Mirror(ctx, many); err != nil || len(ws.Things("issue")) != len(many) {
+		t.Errorf("many: %d kept, %v", len(ws.Things("issue")), err)
+	}
+
+	// A ws from before it could be told says so.
+	ws.Answer(protocol.MethodThingList, func(json.RawMessage) (any, error) { return nil, plugintest.NoMethod(protocol.MethodThingList) })
+	if err := issue.Mirror(ctx, nil); !errors.Is(err, plugin.ErrUnsupported) {
+		t.Errorf("a ws that can't be told: %v", err)
+	}
+}
+
 func TestTheHandshakeChoosesTheHighestBothSpeak(t *testing.T) {
 	declare := func(p *plugin.Plugin) { p.Command("hi", "", func(c *plugin.Call) error { return c.Say("hi") }) }
 	if ws := plugintest.New(t, nil, declare); ws.Protocol() != protocol.Version {

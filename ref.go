@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/withworkspace/plugin/internal/rpc"
 	"github.com/withworkspace/plugin/protocol"
@@ -15,8 +18,10 @@ import (
 // them, and asks the plugin what one is when it's shown (ws show RAM-123,
 // the card under a name in the web UI).
 
-// Ref is a kind of thing the plugin has, and how one is named.
+// Ref is a kind of thing the plugin has, and how one is named. What ws
+// has of the kind without asking is told through it: Mirror, Put, Remove.
 type Ref struct {
+	p    *Plugin
 	ref  protocol.Ref
 	show func(ctx context.Context, a Asked) (Shown, error)
 }
@@ -74,7 +79,7 @@ func (p *Plugin) Ref(kind, title string, show func(ctx context.Context, a Asked)
 	if show == nil {
 		p.declErrs = append(p.declErrs, fmt.Errorf("the ref %q has nothing to show one: ws asks what a name is", kind))
 	}
-	r := &Ref{ref: protocol.Ref{Kind: kind, Title: title}, show: show}
+	r := &Ref{p: p, ref: protocol.Ref{Kind: kind, Title: title}, show: show}
 	p.refs = append(p.refs, r)
 	return r
 }
@@ -155,4 +160,99 @@ func (p *Plugin) showRef(ctx context.Context, in protocol.RefShowParams) (any, e
 		out.Fields = append(out.Fields, protocol.RefField{Label: f.Label, Value: f.Value})
 	}
 	return out, nil
+}
+
+// Thing is one of the plugin's things, as ws keeps it: so it's found by
+// what it says (ws find, Find in the web UI) and named without the plugin
+// being asked. What it is in full is still the Ref's show to say.
+type Thing struct {
+	// Name is its name, one of the Ref's: RAM-123.
+	Name string
+	// Title is what it's called. ws keeps nothing with no title.
+	Title string
+	// State is where it stands, in the plugin's words: In Progress.
+	State string
+	// Changed is when it last changed, if that's known.
+	Changed time.Time
+	// Text is what it says, to be found by: its description, what's been
+	// said on it. ws keeps the start of a long one.
+	Text string
+}
+
+// Refused is ws not keeping some of what it was told: each thing, and
+// why. The others were kept.
+type Refused struct {
+	Things []protocol.ThingRefused
+}
+
+func (e *Refused) Error() string {
+	said := make([]string, 0, len(e.Things))
+	for _, t := range e.Things {
+		said = append(said, t.Ref+": "+t.Why)
+	}
+	if len(said) > 3 {
+		said = append(said[:3], fmt.Sprintf("and %d more", len(e.Things)-3))
+	}
+	return "ws didn't keep " + strings.Join(said, "; ")
+}
+
+// Mirror tells ws every thing of this kind the plugin has: each is kept
+// as it's given, and what ws had of the kind that isn't among them is
+// forgotten. It's what a sync calls when it's done: ws finds the plugin's
+// things by what they say, and names them, without asking the plugin.
+// What ws wouldn't keep is a *Refused, after the rest is done.
+//
+//	p.Sync("issues", 5*time.Minute, func(ctx context.Context) error {
+//		…
+//		return issue.Mirror(ctx, things)
+//	})
+func (r *Ref) Mirror(ctx context.Context, things []Thing) error {
+	var had protocol.ThingListResult
+	if err := r.p.ask(ctx, protocol.MethodThingList, protocol.ThingListParams{Kind: r.ref.Kind}, &had); err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, t := range things {
+		have[t.Name] = true
+	}
+	refused := r.Put(ctx, things...)
+	var no *Refused
+	if refused != nil && !errors.As(refused, &no) {
+		return refused
+	}
+	gone := slices.DeleteFunc(had.Refs, func(name string) bool { return have[name] })
+	if err := r.Remove(ctx, gone...); err != nil {
+		return err
+	}
+	return refused
+}
+
+// Put tells ws of things of this kind: each is kept, in place of what ws
+// had by that name. What ws wouldn't keep is a *Refused.
+func (r *Ref) Put(ctx context.Context, things ...Thing) error {
+	var refused []protocol.ThingRefused
+	for batch := range slices.Chunk(things, protocol.ThingsAtOnce) {
+		in := protocol.ThingPutParams{Things: make([]protocol.Thing, 0, len(batch))}
+		for _, t := range batch {
+			in.Things = append(in.Things, protocol.Thing{Kind: r.ref.Kind, Ref: t.Name, Title: t.Title, State: t.State, Changed: t.Changed, Text: t.Text})
+		}
+		var out protocol.ThingPutResult
+		if err := r.p.ask(ctx, protocol.MethodThingPut, in, &out); err != nil {
+			return err
+		}
+		refused = append(refused, out.Refused...)
+	}
+	if len(refused) > 0 {
+		return &Refused{Things: refused}
+	}
+	return nil
+}
+
+// Remove has ws forget things of this kind, by name. One it doesn't have
+// is nothing to forget.
+func (r *Ref) Remove(ctx context.Context, names ...string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	return r.p.ask(ctx, protocol.MethodThingRemove, protocol.ThingRemoveParams{Kind: r.ref.Kind, Refs: names}, nil)
 }

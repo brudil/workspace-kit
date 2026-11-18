@@ -67,6 +67,10 @@ func TestHello(t *testing.T) {
 	if _, err := ws.Show("visit", "VISIT-4", false); !errors.Is(err, plugin.ErrNotFound) {
 		t.Errorf("VISIT-4, which hasn't happened: %v", err)
 	}
+	// ws was told of each as it happened: it has them without asking.
+	if told := ws.Things("visit"); len(told) != 3 || told[2].Ref != "VISIT-3" || told[2].Title != "Visit 3" {
+		t.Errorf("visits ws was told of: %+v", told)
+	}
 
 	// A change of config reaches the next read, with no restart, and the
 	// open app is told to ask again.

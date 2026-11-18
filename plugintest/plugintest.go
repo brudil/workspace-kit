@@ -58,6 +58,8 @@ type WS struct {
 	answers map[string]func(json.RawMessage) (any, error)
 	arrive  chan struct{} // closed and remade whenever a notification comes
 	closed  bool
+	started chan struct{}             // closed once the plugin's registered
+	things  map[string]protocol.Thing // what it's told ws of its things, by kind and name
 }
 
 // note is a notification the plugin sent.
@@ -133,7 +135,7 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 	if setup != nil {
 		setup(p)
 	}
-	ws := &WS{p: p, dir: dir, keep: keep, done: make(chan struct{}), arrive: make(chan struct{})}
+	ws := &WS{p: p, dir: dir, keep: keep, done: make(chan struct{}), arrive: make(chan struct{}), started: make(chan struct{}), things: map[string]protocol.Thing{}}
 
 	toPlugin, fromWS := io.Pipe()
 	toWS, fromPlugin := io.Pipe()
@@ -192,6 +194,7 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 		return nil, fmt.Errorf("the plugin chose version %d of the plugin protocol: it speaks %v, and ws was said to speak %v", out.Protocol, out.Protocols, offer)
 	}
 	ws.reg, ws.ver = out.Registration, out.Protocol
+	close(ws.started)
 	go func() { <-ws.done; closeWS() }()
 	return ws, nil
 }
@@ -216,6 +219,10 @@ func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (
 	ws.mu.Unlock()
 	if answer != nil {
 		return answer(params)
+	}
+	switch method {
+	case protocol.MethodThingPut, protocol.MethodThingRemove, protocol.MethodThingList:
+		return ws.keepThings(method, params)
 	}
 	if !notifications[method] {
 		// A request it wasn't told how to answer: as a ws from before it.
@@ -255,6 +262,10 @@ func (ws *WS) Answer(method string, fn func(params json.RawMessage) (any, error)
 	ws.answers[method] = fn
 }
 
+// NoMethod is what an Answer returns to answer as a ws from before a
+// request would: the plugin's ErrUnsupported.
+func NoMethod(method string) error { return rpc.MethodNotFound(method) }
+
 // Missions are the missions the stand-in has: what it answers p.Missions
 // (those not archived, unless asked for them too) and p.Mission with.
 func (ws *WS) Missions(missions ...protocol.MissionDetail) {
@@ -291,6 +302,88 @@ func (ws *WS) Repos(repos ...protocol.Repo) {
 		}
 		return protocol.RepoListResult{Repos: repos}, nil
 	})
+}
+
+// keepThings answers what the plugin tells ws of its things, as ws does:
+// a thing is kept when its kind is one the plugin registered, its name
+// one of that kind's, and it has a title.
+func (ws *WS) keepThings(method string, params json.RawMessage) (any, error) {
+	<-ws.started // what it registered is what its things are named by
+	kind := func(k string) (protocol.Ref, bool) {
+		i := slices.IndexFunc(ws.reg.Refs, func(r protocol.Ref) bool { return r.Kind == k })
+		if i < 0 {
+			return protocol.Ref{}, false
+		}
+		return ws.reg.Refs[i], true
+	}
+	invalid := func(err error) error { return &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()} }
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	switch method {
+	case protocol.MethodThingPut:
+		var in protocol.ThingPutParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, invalid(err)
+		}
+		if len(in.Things) > protocol.ThingsAtOnce {
+			return nil, invalid(fmt.Errorf("%d things at once: %d is the most", len(in.Things), protocol.ThingsAtOnce))
+		}
+		out := protocol.ThingPutResult{}
+		for _, t := range in.Things {
+			why := ""
+			switch r, ok := kind(t.Kind); {
+			case !ok:
+				why = "the plugin registered no ref called " + t.Kind
+			case !r.Names(t.Ref):
+				why = "it isn't one of " + t.Kind + "'s names"
+			case strings.TrimSpace(t.Title) == "":
+				why = "it has no title"
+			}
+			if why != "" {
+				out.Refused = append(out.Refused, protocol.ThingRefused{Kind: t.Kind, Ref: t.Ref, Why: why})
+				continue
+			}
+			ws.things[t.Kind+"\x00"+t.Ref] = t
+		}
+		return out, nil
+	case protocol.MethodThingRemove:
+		var in protocol.ThingRemoveParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, invalid(err)
+		}
+		for _, ref := range in.Refs {
+			delete(ws.things, in.Kind+"\x00"+ref)
+		}
+		return struct{}{}, nil
+	}
+	var in protocol.ThingListParams
+	if err := json.Unmarshal(params, &in); err != nil {
+		return nil, invalid(err)
+	}
+	out := protocol.ThingListResult{Refs: []string{}}
+	for _, t := range ws.things {
+		if t.Kind == in.Kind {
+			out.Refs = append(out.Refs, t.Ref)
+		}
+	}
+	slices.Sort(out.Refs)
+	return out, nil
+}
+
+// Things are what the plugin has told ws of its things of a kind (a
+// Ref's Mirror, Put and Remove), by name: what ws would find and draw
+// without asking it.
+func (ws *WS) Things(kind string) []protocol.Thing {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	out := []protocol.Thing{}
+	for _, t := range ws.things {
+		if t.Kind == kind {
+			out = append(out, t)
+		}
+	}
+	slices.SortFunc(out, func(a, b protocol.Thing) int { return strings.Compare(a.Ref, b.Ref) })
+	return out
 }
 
 // Show asks the plugin what one of its things is, as ws does when a name
