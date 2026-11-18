@@ -275,9 +275,17 @@ func (p *Plugin) initialize(in protocol.InitializeParams) (any, error) {
 		p.mu.Unlock()
 		return nil, errors.New("initialize was already sent")
 	}
-	if in.Protocol == 0 {
-		in.Protocol = protocol.Version
+	chosen := protocol.Choose(protocol.Versions, in.Offered())
+	if chosen == 0 {
+		// ws refuses the plugin, and says which side is behind: it's
+		// told which versions the plugin speaks, and nothing more.
+		p.info = in
+		p.mu.Unlock()
+		close(p.initialized)
+		p.Log.Error(fmt.Sprintf("ws speaks versions %v of the plugin protocol, and this plugin %v: none in common", in.Offered(), protocol.Versions))
+		return protocol.InitializeResult{Protocols: protocol.Versions}, nil
 	}
+	in.Protocol = chosen // what everything after this is in
 	p.info = in
 	p.mu.Unlock()
 	defer close(p.initialized)
@@ -302,7 +310,7 @@ func (p *Plugin) initialize(in protocol.InitializeParams) (any, error) {
 		}
 	}
 	return rpc.Then{
-		Result: protocol.InitializeResult{Protocol: protocol.Version, Registration: reg},
+		Result: protocol.InitializeResult{Protocol: chosen, Protocols: protocol.Versions, Registration: reg},
 		Do:     p.startSyncs, // once ws has the registration
 	}, nil
 }

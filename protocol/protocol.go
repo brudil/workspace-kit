@@ -3,10 +3,30 @@
 // PROTOCOL.md at the root of this repository.
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
-// Version is the protocol's version, said by both sides in initialize.
+// Version is the newest version of the protocol this package speaks.
 const Version = 1
+
+// Versions are every version of the protocol this package speaks, oldest
+// first. Within a version, changes only add; anything else is a new
+// version, with types of its own.
+var Versions = []int{1}
+
+// Choose is the version a handshake settles on: the highest that both
+// sides speak, or 0 when they have none in common.
+func Choose(a, b []int) int {
+	chosen := 0
+	for _, v := range a {
+		if v > chosen && slices.Contains(b, v) {
+			chosen = v
+		}
+	}
+	return chosen
+}
 
 // What ws sends a plugin.
 const (
@@ -38,7 +58,11 @@ const (
 
 // InitializeParams is what ws tells a plugin as it starts.
 type InitializeParams struct {
-	Protocol  int        `json:"protocol"`
+	// Protocol is the newest version ws speaks.
+	Protocol int `json:"protocol"`
+	// Protocols are every version ws speaks. A ws from before versions
+	// were chosen doesn't send it, and speaks only Protocol.
+	Protocols []int      `json:"protocols,omitempty"`
 	WS        WSInfo     `json:"ws"`
 	Plugin    PluginInfo `json:"plugin"`
 	Workspace Workspace  `json:"workspace"`
@@ -77,9 +101,28 @@ type ViewInfo struct {
 	Base   string `json:"base"`
 }
 
-// InitializeResult is a plugin's answer: what it speaks, and what it adds.
+// Offered are the versions ws speaks, from what it said. A ws that says
+// nothing of it speaks 1.
+func (in InitializeParams) Offered() []int {
+	switch {
+	case len(in.Protocols) > 0:
+		return in.Protocols
+	case in.Protocol > 0:
+		return []int{in.Protocol}
+	}
+	return []int{1}
+}
+
+// InitializeResult is a plugin's answer: the version it chose, the
+// versions it speaks, and what it adds.
 type InitializeResult struct {
-	Protocol     int          `json:"protocol"`
+	// Protocol is the version chosen (Choose), which everything after
+	// initialize is in. 0: ws and the plugin have none in common, and the
+	// plugin registers nothing.
+	Protocol int `json:"protocol"`
+	// Protocols are every version the plugin speaks, so that ws can say
+	// which side is behind when there's none in common.
+	Protocols    []int        `json:"protocols,omitempty"`
 	Registration Registration `json:"registration"`
 }
 

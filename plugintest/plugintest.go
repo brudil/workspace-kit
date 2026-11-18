@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,7 @@ type WS struct {
 	p    *plugin.Plugin
 	conn *rpc.Conn
 	reg  protocol.Registration
+	ver  int // the protocol version the handshake chose
 	dir  string
 	keep bool          // dir is the test's own: not removed
 	done chan struct{} // closed when the plugin stops
@@ -71,6 +73,7 @@ type options struct {
 	dir    string
 	root   string
 	ws     string
+	offer  []int
 }
 
 // Config is the config the plugin starts with, by key.
@@ -89,6 +92,11 @@ func Root(dir string) Option { return func(o *options) { o.root = dir } }
 // ws command (p.WS). A test gives it a script that answers as ws would.
 // The default is none, and p.WS fails with plugin.ErrNoWS.
 func Executable(path string) Option { return func(o *options) { o.ws = path } }
+
+// Offer is the protocol versions the stand-in for ws says it speaks, in
+// place of every version this release of the framework does: to try a
+// plugin against a ws that's older or newer than it.
+func Offer(versions ...int) Option { return func(o *options) { o.offer = versions } }
 
 // Name is the plugin's name (the default is "test").
 func Name(name string) Option { return func(o *options) { o.name = name } }
@@ -150,8 +158,13 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 	if root == "" {
 		root = dir
 	}
+	offer := o.offer
+	if len(offer) == 0 {
+		offer = protocol.Versions
+	}
 	in := protocol.InitializeParams{
-		Protocol:  protocol.Version,
+		Protocol:  slices.Max(offer),
+		Protocols: offer,
 		WS:        protocol.WSInfo{Version: "test", Executable: o.ws},
 		Plugin:    protocol.PluginInfo{Name: o.name, Version: "0.0.0", Dir: dir, Data: data},
 		Workspace: protocol.Workspace{Root: root},
@@ -169,7 +182,14 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 		}
 		return nil, err
 	}
-	ws.reg = out.Registration
+	if out.Protocol == 0 || !slices.Contains(offer, out.Protocol) {
+		closeWS()
+		if !keep {
+			os.RemoveAll(dir) //nolint:errcheck // a temporary folder
+		}
+		return nil, fmt.Errorf("the plugin chose version %d of the plugin protocol: it speaks %v, and ws was said to speak %v", out.Protocol, out.Protocols, offer)
+	}
+	ws.reg, ws.ver = out.Registration, out.Protocol
 	go func() { <-ws.done; closeWS() }()
 	return ws, nil
 }
@@ -199,6 +219,9 @@ func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (
 
 // Plugin is the plugin under test.
 func (ws *WS) Plugin() *plugin.Plugin { return ws.p }
+
+// Protocol is the version of the plugin protocol the handshake chose.
+func (ws *WS) Protocol() int { return ws.ver }
 
 // Registration is what the plugin registered.
 func (ws *WS) Registration() protocol.Registration { return ws.reg }
