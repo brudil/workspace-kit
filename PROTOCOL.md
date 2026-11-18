@@ -136,7 +136,7 @@ Every field is optional.
     "roles": ["crew", "orchestrator", "conversation"],
     "guide": "markdown"
   },
-  "syncs": [ { "name": "issues", "every": 300 } ],
+  "syncs": [ { "name": "issues", "every": 900, "open": 60 } ],
   "refs": [
     { "kind": "issue", "title": "Jira issue", "icon": "ticket",
       "prefixes": ["RAM-", "RAP-"], "tail": "number",
@@ -177,7 +177,7 @@ Every field is optional.
 - `commands.name` is the word after `ws`. It defaults to the plugin's name.
 - `agent.roles` empty means every role.
 - `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
-- `syncs` is for show (`ws plugin list`); ws doesn't run them.
+- `syncs` is for show (`ws plugin list`); ws doesn't run them. `every` is seconds between runs, `0` for a sync with no interval of its own. `open`, where it's there, is seconds between runs while the plugin's app is on screen ([`view/looking`](#viewlooking-notification)).
 - `refs` are how the plugin's things are named: [Refs](#refs).
 - `actions` are what the plugin can do when it's asked from Find, among what there is to do there: each an `id` (lower-case letters, digits and hyphens), a `title`, and an `icon` and a `hint` if it has them. ws runs one with [`action/run`](#actionrun-request). What can be done to one of its things is the thing's kind's (`refs[].actions`).
 
@@ -328,6 +328,21 @@ Done, it says what came of it. Both are optional:
 - `open` is a path in the plugin's app, which ws goes to.
 
 A plugin that changes one of its things tells ws of it as it now is ([`thing/put`](#thingput-request)). An action that fails is an error, whose message is said. ws gives a plugin two minutes.
+
+### `view/looking` (notification)
+
+```json
+{ "app": true, "ws": true }
+```
+
+Who's looking at what the plugin shows in ws's web UI. ws says it once the plugin has answered `initialize`, if anyone is, and whenever it changes after. Until it's said, nobody is.
+
+- `app`: the plugin's app is on screen, in a page of ws's that's showing (a tab in front, not one behind another).
+- `ws`: a page of ws's web UI is showing, whichever it is, so the plugin's sidebar entries and their badges are on screen. It's true whenever `app` is.
+
+ws asks nothing by it, and never asks a plugin to fetch: what a plugin fetches, and when, is the plugin's to decide. This is what it has to decide by. Someone who looks away for a moment (to another tab and back, from one page to the next) hasn't gone: ws says nobody's looking only once that's been so for a few seconds.
+
+Added within version 1: a ws from before it never says, and a plugin from before it drops it.
 
 ### `shutdown` (request)
 

@@ -47,6 +47,9 @@ const (
 	// of its things: ActionRunParams → ActionRunResult. An addition to
 	// version 1: a plugin that registers actions answers it.
 	MethodActionRun = "action/run" // request
+	// MethodViewLooking is an addition to version 1: a ws from before it
+	// never says who's looking, and a plugin from before it drops it.
+	MethodViewLooking = "view/looking" // notification
 )
 
 // What a plugin sends ws: notifications all.
@@ -208,10 +211,13 @@ type Agent struct {
 	Guide string   `json:"guide,omitempty"`
 }
 
-// Sync is a sync the plugin runs, for show. Every is in seconds.
+// Sync is a sync the plugin runs, for show. Every is in seconds: 0 is a
+// sync with no interval of its own. Open, in seconds too, is its interval
+// while the plugin's app is on screen, where that's another.
 type Sync struct {
 	Name  string `json:"name"`
 	Every int    `json:"every"`
+	Open  int    `json:"open,omitempty"`
 }
 
 // Ref is a kind of thing the plugin has that words name (a Jira issue,
@@ -590,6 +596,18 @@ func (k ConfigKey) Secret() bool { return k.Type == TypeSecret }
 // ConfigChangedParams is the whole config, after a change.
 type ConfigChangedParams struct {
 	Config map[string]json.RawMessage `json:"config"`
+}
+
+// ViewLookingParams is who's looking at what the plugin shows in ws's web
+// UI. ws says it when it changes, and asks nothing by it: what a plugin
+// fetches, and when, is the plugin's to decide.
+type ViewLookingParams struct {
+	// App: the plugin's app is on screen, in a page of ws's that's showing.
+	App bool `json:"app"`
+	// WS: a page of ws's web UI is showing, whichever it is, so the
+	// plugin's sidebar entries and their badges are on screen. True
+	// whenever App is.
+	WS bool `json:"ws"`
 }
 
 // CommandRunParams is a command someone ran: everything after the

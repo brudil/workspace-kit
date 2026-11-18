@@ -101,6 +101,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `p.Command` | `ws <plugin> <name>`. Return data and it's printed as a table for a person, JSON for `-f json`, markdown for `-f llm`. |
 | `p.DB()` | A SQLite database in the plugin's data folder, with `migrations/*.sql` applied in order before anything runs. Pure Go: no C compiler. |
 | `p.Sync` | The one place a plugin talks to its service: at start, on an interval, and on demand, one at a time, retried when it fails. Everything else reads the database. |
+| `plugin.WhileOpen`, `p.Looking`, `p.OnLooking` | Fetching to suit who's looking. ws says when the plugin's app is on screen, and when any page of ws's is; it never asks for a fetch. `p.Sync("issues", 15*time.Minute, fetch, plugin.WhileOpen(time.Minute))` is every minute while the app's on screen (at once when it comes on screen with older than that) and every fifteen while it isn't; an interval of `0` is no fetching unless it is. `p.Looking()` and `p.OnLooking` are for a plugin that decides by hand. |
 | `agents.md` | What agents are told of the plugin. |
 | `p.Setup`, `p.OnConfig` | Declaring what depends on config, and hearing of a change. |
 | `p.Log`, `p.Changed`, `p.Badge` | A log, telling the open app that what it shows is stale, the count in the sidebar. |
@@ -115,7 +116,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `.Show` | One thing, as it is now: for one ws wasn't told of, and for `ws show RAM-123`. `ErrNotFound` for a name the plugin has nothing by. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, and `ws.Act` and `ws.ActOn` run its actions with what's been answered. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
 
 ## A plugin's folder
 
