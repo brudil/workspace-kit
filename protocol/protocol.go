@@ -69,8 +69,9 @@ type Workspace struct {
 	Root string `json:"root"`
 }
 
-// ViewInfo is where a plugin serves its view: a unix socket to listen on,
-// and the path ws serves it under.
+// ViewInfo is where a plugin serves its own HTTP (its app's files and
+// what its app asks it): a unix socket to listen on, and the path ws
+// serves it under.
 type ViewInfo struct {
 	Listen string `json:"listen"`
 	Base   string `json:"base"`
@@ -86,6 +87,7 @@ type InitializeResult struct {
 type Registration struct {
 	Description   string      `json:"description,omitempty"`
 	Views         []View      `json:"views,omitempty"`
+	UI            *UI         `json:"ui,omitempty"`
 	Commands      *Commands   `json:"commands,omitempty"`
 	Agent         *Agent      `json:"agent,omitempty"`
 	Syncs         []Sync      `json:"syncs,omitempty"`
@@ -93,12 +95,24 @@ type Registration struct {
 	Config        []ConfigKey `json:"config,omitempty"`
 }
 
-// View is an entry in ws's sidebar, and where in the plugin's view it opens.
+// View is an entry in ws's sidebar, and where in the plugin's app it opens.
 type View struct {
 	Title string `json:"title"`
 	Icon  string `json:"icon,omitempty"`
 	Under string `json:"under,omitempty"`
 	Path  string `json:"path"`
+}
+
+// UI is the plugin's app: what ws's page for the plugin loads. A plugin
+// has one, whatever views it has, and serves no HTML of its own. Each is
+// a path in the plugin's own HTTP, with whatever query it has
+// ("/ui/app.js?v=3f9c2a").
+type UI struct {
+	// Script is the app's entry, loaded as a module. A plugin with views
+	// has one.
+	Script string `json:"script,omitempty"`
+	// Style is its stylesheet, if it has one, loaded before the app.
+	Style string `json:"style,omitempty"`
 }
 
 // Commands is a plugin's command: the word after ws, and what follows it.
@@ -204,7 +218,8 @@ type LogParams struct {
 	Message string `json:"message"`
 }
 
-// ViewBadgeParams is the count beside a view's sidebar entry.
+// ViewBadgeParams is the count beside a view's sidebar entry: the view
+// registered with that path.
 type ViewBadgeParams struct {
 	Path  string `json:"path"`
 	Count int    `json:"count"`

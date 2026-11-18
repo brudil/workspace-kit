@@ -1,7 +1,7 @@
 // Package plugintest runs a plugin inside a test, against a stand-in for
 // ws: it starts the plugin, and then does what ws does to one. It runs a
-// command, fetches a page, changes config, and shows what the plugin
-// told ws.
+// command, asks the plugin's HTTP what its app would, changes config, and
+// shows what the plugin told ws.
 //
 //	func TestSay(t *testing.T) {
 //		ws := plugintest.New(t, files, setup)
@@ -156,7 +156,7 @@ func Start(files fs.FS, setup func(p *plugin.Plugin), opts ...Option) (*WS, erro
 		Plugin:    protocol.PluginInfo{Name: o.name, Version: "0.0.0", Dir: dir, Data: data},
 		Workspace: protocol.Workspace{Root: root},
 		Config:    config,
-		// No socket: pages are fetched from the plugin's handler.
+		// No socket: requests are answered by the plugin's handler.
 		View: protocol.ViewInfo{Base: "/plugins/" + o.name},
 	}
 	var out protocol.InitializeResult
@@ -257,31 +257,34 @@ func (ws *WS) RunContext(ctx context.Context, args ...string) Result {
 	return res
 }
 
-// Page is a response from the plugin's view.
-type Page struct {
+// Response is an answer from the plugin's HTTP: its app's files, and
+// what its app asks it.
+type Response struct {
 	Status int
 	Header http.Header
 	Body   string
 }
 
-// Get fetches a page of the plugin's view: path is the path under the
-// view ("/browse/PROJ-1"), as ws sends it on.
-func (ws *WS) Get(path string) Page {
+// Get asks the plugin's HTTP for path, as its app would with
+// fetch(ws.api(path)): the path under the plugin's base
+// ("/api/issues?open=1"), as ws sends it on.
+func (ws *WS) Get(path string) Response {
 	return ws.serve(httptest.NewRequest(http.MethodGet, path, nil))
 }
 
-// Post posts a form to the plugin's view.
-func (ws *WS) Post(path string, form url.Values) Page {
+// Post posts a form to the plugin's HTTP. For any other request (a JSON
+// body, another method), serve one with Plugin().Handler().
+func (ws *WS) Post(path string, form url.Values) Response {
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return ws.serve(r)
 }
 
-func (ws *WS) serve(r *http.Request) Page {
+func (ws *WS) serve(r *http.Request) Response {
 	r.Header.Set("X-Forwarded-Prefix", "/plugins/"+ws.p.Name())
 	rec := httptest.NewRecorder()
 	ws.p.Handler().ServeHTTP(rec, r)
-	return Page{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+	return Response{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
 }
 
 // SetConfig changes the plugin's config to values, the whole of it, and

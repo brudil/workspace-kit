@@ -4,3 +4,6 @@
 *.db
 *.db-shm
 *.db-wal
+
+# What an app's build needs. Its built files (ui/dist) are committed.
+node_modules/

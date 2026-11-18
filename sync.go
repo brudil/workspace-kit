@@ -27,8 +27,8 @@ type syncer struct {
 	wake     chan struct{}
 }
 
-// SyncState is how a sync stands: for the foot of every page, and for
-// ws plugin list.
+// SyncState is how a sync stands: for ws plugin list, and for a plugin
+// whose app shows it.
 type SyncState struct {
 	Name    string
 	At      time.Time // when it last succeeded: zero if it hasn't
@@ -42,15 +42,16 @@ type SyncState struct {
 var retryAfter = 10 * time.Second
 
 // Sync declares a sync: the one way a plugin talks to its service. fn
-// fetches, and writes what it finds to the plugin's database; pages,
-// commands and everything else read from there, so nothing a person or
-// an agent waits on is as slow as the service.
+// fetches, and writes what it finds to the plugin's database; the app's
+// API, commands and everything else read from there, so nothing a person
+// or an agent waits on is as slow as the service.
 //
 // It runs when the plugin starts, every `every` after, and when asked
-// (ws <plugin> sync, or Refresh on a page). One runs at a time: a second
-// request waits for the first's result. A failure is tried again sooner,
-// with a growing wait, and what was fetched before stays. It waits while
-// required config is missing. When it succeeds, open pages are reloaded.
+// (ws <plugin> sync, or SyncNow). One runs at a time: a second request
+// waits for the first's result. A failure is tried again sooner, with a
+// growing wait, and what was fetched before stays. It waits while
+// required config is missing. When it succeeds, the open app is told
+// (Changed).
 func (p *Plugin) Sync(name string, every time.Duration, fn func(ctx context.Context) error) {
 	p.declaring("Sync")
 	for _, was := range p.syncs {
@@ -151,7 +152,7 @@ func (s *syncer) run(ctx context.Context) error {
 	s.mu.Unlock()
 
 	// The run is the plugin's, not the asker's: someone giving up on a
-	// page doesn't stop a fetch that others are waiting on.
+	// request doesn't stop a fetch that others are waiting on.
 	runCtx, cancel := context.WithTimeout(s.p.ctx, s.p.SyncTimeout)
 	start := time.Now()
 	err := s.p.recovering("sync "+s.name, func() error { return s.fn(runCtx) })
