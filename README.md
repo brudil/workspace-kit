@@ -47,7 +47,8 @@ A plugin's web UI is one client-side app, and ws serves the page it runs in. The
 
 - **The app** is a JS bundle, and a stylesheet if it wants one, built from the plugin's `ui/` into `ui/dist/` as `app.js` and `app.css`. `p.UI("ui/dist")` serves that folder and tells ws to load it.
 - **The page** is ws's. It has ws's theme in it before the app loads, and an empty `<div id="root">` for the app to render into. ws serves it at every path under `/x/<name>/`, so a link to anywhere in the app loads the app there.
-- **A view** is an entry in ws's sidebar that opens the app at a path: `p.View("Board", plugin.At("/board"))`. The app routes itself.
+- **A view** is an entry in ws's sidebar that opens the app at a path: `p.View("Board", plugin.At("/board"))`.
+- **ws keeps the history.** The app shows the screen at the path ws says it's at (`ws.path`, then `ws.onNavigate`), and moves by asking: a link to `ws.href("/board")`, or `ws.go("/board")`. Back, forward and ⌘-click all work as they do on ws's own pages.
 - **The app talks to ws** with [`@withworkspace/ui-lib`](https://www.npmjs.com/package/@withworkspace/ui-lib): where it is, its title, the theme, and when what it shows is stale. How they talk is the frame protocol, in [`ui-lib`'s `PROTOCOL.md`](https://github.com/withworkspace/ui-lib/blob/main/PROTOCOL.md).
 - **The app talks to the plugin** over the plugin's own HTTP: `p.Handle("GET /api/issues", …)` here is `fetch(ws.api("/api/issues"))` there. `p.Changed()` tells the open app to ask again.
 
@@ -64,6 +65,8 @@ async function show() {
 ws.onChanged(show);
 show();
 ```
+
+The app can be written with anything that bundles to one file. We suggest [Preact](https://preactjs.com): it's small (about 10 KB in the bundle), it's the JSX and hooks ws's own web UI is written in, and a new plugin from plugin-dev starts on it, with hooks onto ws (`usePath`, `useTitle`, `useAsk`) in its `ui/src/ws.ts`.
 
 The app's built files are committed. `go:embed` needs them when the plugin is built, so with them Go alone builds, tests and installs a plugin, and only changing its app needs Node.
 
