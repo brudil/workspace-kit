@@ -58,6 +58,9 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		p.View("Board", plugin.At("/board"))
 		p.Command("mine", "Issues assigned to you", func(*plugin.Call) error { return nil }).Args("[PROJECT]")
 		p.Sync("issues", 5*time.Minute, func(context.Context) error { return nil })
+		p.Ref("issue", "Jira issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).
+			Prefix("RAM-", "RAP-").Address("https://acme.atlassian.net/browse/{ref}").Opens("/issue/{ref}").Icon("ticket")
+		p.Ref("sprint", "", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }).Prefix("SPRINT-")
 		p.Guide("", "crew", "orchestrator")
 	}, plugintest.Name("jira"), plugintest.Config(map[string]any{"site": "https://x", "token": "t"}))
 
@@ -70,6 +73,9 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		`{"name":"sync","short":"Fetch what's new now","args":"[NAME...]"}]},` +
 		`"agent":{"roles":["crew","orchestrator"],"guide":"Use ` + "`ws jira mine`" + `.\n"},` +
 		`"syncs":[{"name":"issues","every":300}],` +
+		`"refs":[{"kind":"issue","title":"Jira issue","icon":"ticket","prefixes":["RAM-","RAP-"],` +
+		`"address":"https://acme.atlassian.net/browse/{ref}","path":"/issue/{ref}"},` +
+		`{"kind":"sprint","prefixes":["SPRINT-"]}],` +
 		`"config_version":2,` +
 		`"config":[` +
 		`{"key":"site","title":"Jira site","type":"url","required":true,"example":"https://acme.atlassian.net"},` +
@@ -85,6 +91,7 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 	built := fstest.MapFS{"ui/dist/app.js": file(appJS)}
 	ok := func(http.ResponseWriter, *http.Request) {}
+	shows := func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil }
 	for name, tc := range map[string]struct {
 		files fstest.MapFS
 		setup func(p *plugin.Plugin)
@@ -123,6 +130,35 @@ func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 				p.Command("a", "", func(*plugin.Call) error { return nil })
 			},
 			why: "declared twice",
+		},
+		"a ref declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "", shows).Prefix("RAM-")
+				p.Ref("issue", "", shows).Prefix("RAP-")
+			},
+			why: "declared twice",
+		},
+		"a ref that names nothing": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows) },
+			why:   "it has no prefixes",
+		},
+		"a ref whose prefix is ws's own kind of name": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows).Prefix("demo#") },
+			why:   `its prefix "demo#"`,
+		},
+		"a ref with nothing to show one": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "", nil).Prefix("RAM-") },
+			why:   "nothing to show one",
+		},
+		"a ref whose address has nowhere for the name": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "", shows).Prefix("RAM-").Address("https://acme.atlassian.net/browse/")
+			},
+			why: "its address",
+		},
+		"a ref that opens at a path that isn't one": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "", shows).Prefix("RAM-").Opens("issue/{ref}") },
+			why:   "its path",
 		},
 		"a config key declared twice": {
 			setup: func(p *plugin.Plugin) {
@@ -765,6 +801,68 @@ func TestAskingWS(t *testing.T) {
 }
 
 // --- the protocol's version ---
+
+// --- refs ---
+
+func TestWSAsksWhatANameIs(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Ref("issue", "Jira issue", func(_ context.Context, a plugin.Asked) (plugin.Shown, error) {
+			switch a.Name {
+			case "RAM-1":
+				md := "The clock should be injected."
+				if a.Full {
+					md += "\n\n## Comments\n\nDana: agreed."
+				}
+				return plugin.Shown{Title: "Token refresh is flaky", State: "In Progress", Fields: []plugin.Field{{"Assignee", "Dana"}}, Markdown: md}, nil
+			case "RAM-2":
+				panic("the issue's gone wrong")
+			}
+			return plugin.Shown{}, plugin.ErrNotFound
+		}).Prefix("RAM-")
+	})
+
+	got, err := ws.Show("issue", "RAM-1", false)
+	want := protocol.RefShowResult{Title: "Token refresh is flaky", State: "In Progress", Fields: []protocol.RefField{{Label: "Assignee", Value: "Dana"}}, Markdown: "The clock should be injected."}
+	if err != nil || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("RAM-1: %+v, %v; want %+v", got, err, want)
+	}
+	// Everything, when everything's asked for.
+	if got, err := ws.Show("issue", "RAM-1", true); err != nil || !strings.Contains(got.Markdown, "Dana: agreed.") {
+		t.Errorf("RAM-1 in full: %+v, %v", got, err)
+	}
+	// A name the plugin has nothing by is said to be, not failed on.
+	if _, err := ws.Show("issue", "RAM-9", false); !errors.Is(err, plugin.ErrNotFound) || !strings.Contains(err.Error(), "there's no issue RAM-9") {
+		t.Errorf("RAM-9: %v, want not found", err)
+	}
+	// A handler that panics fails its own answer, and the plugin runs on.
+	if _, err := ws.Show("issue", "RAM-2", false); err == nil || !strings.Contains(err.Error(), "gone wrong") {
+		t.Errorf("RAM-2: %v, want what went wrong", err)
+	}
+	if _, err := ws.Show("sprint", "SPRINT-1", false); err == nil || !strings.Contains(err.Error(), `no ref called "sprint"`) {
+		t.Errorf("a kind that isn't registered: %v", err)
+	}
+	if _, err := ws.Show("issue", "RAM-1", false); err != nil {
+		t.Errorf("after all that: %v", err)
+	}
+}
+
+// What a ref's names follow is usually config: declared in Setup, a
+// change to it starts the plugin afresh, and it registers them again.
+func TestRefsFollowConfig(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		projects := p.Config.List("projects", "Projects")
+		p.Setup(func() {
+			r := p.Ref("issue", "Issue", func(context.Context, plugin.Asked) (plugin.Shown, error) { return plugin.Shown{}, nil })
+			for _, key := range projects.Get() {
+				r.Prefix(key + "-")
+			}
+		})
+	}, plugintest.Config(map[string]any{"projects": []string{"RAM", "RAP"}}))
+	refs := ws.Registration().Refs
+	if len(refs) != 1 || strings.Join(refs[0].Prefixes, " ") != "RAM- RAP-" {
+		t.Errorf("refs: %+v", refs)
+	}
+}
 
 func TestTheHandshakeChoosesTheHighestBothSpeak(t *testing.T) {
 	declare := func(p *plugin.Plugin) { p.Command("hi", "", func(c *plugin.Call) error { return c.Say("hi") }) }

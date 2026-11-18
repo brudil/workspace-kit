@@ -5,7 +5,11 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -35,6 +39,10 @@ const (
 	MethodConfigChanged = "config/changed" // notification
 	MethodCommandRun    = "command/run"    // request
 	MethodShutdown      = "shutdown"       // request
+	// MethodRefShow asks what one of the plugin's things is, by its name:
+	// RefShowParams → RefShowResult. An addition to version 1: a plugin
+	// from before it answers CodeMethodNotFound, and registers no refs.
+	MethodRefShow = "ref/show" // request
 )
 
 // What a plugin sends ws: notifications all.
@@ -135,6 +143,7 @@ type Registration struct {
 	Commands      *Commands   `json:"commands,omitempty"`
 	Agent         *Agent      `json:"agent,omitempty"`
 	Syncs         []Sync      `json:"syncs,omitempty"`
+	Refs          []Ref       `json:"refs,omitempty"`
 	ConfigVersion int         `json:"config_version,omitempty"`
 	Config        []ConfigKey `json:"config,omitempty"`
 }
@@ -195,6 +204,110 @@ type Agent struct {
 type Sync struct {
 	Name  string `json:"name"`
 	Every int    `json:"every"`
+}
+
+// Ref is a kind of thing the plugin has that words name (a Jira issue,
+// RAM-123), and how one is named: what ws finds in what's written, links,
+// and asks the plugin about (MethodRefShow). It's data, not code: ws finds
+// names in its own program and in its web UI, from this alone.
+type Ref struct {
+	// Kind is the plugin's word for what it is (issue): lower-case
+	// letters, digits and hyphens. ws asks about one by it.
+	Kind string `json:"kind"`
+	// Title is what one is called, for a person: Jira issue.
+	Title string `json:"title,omitempty"`
+	// Icon is one of ws's icon names.
+	Icon string `json:"icon,omitempty"`
+	// Prefixes are what a name starts with (RAM-, RAP-): letters, digits
+	// and underscores, starting with a letter and ending in a hyphen. A
+	// name is one of them and its Tail, as written: ram-12 isn't RAM-12.
+	Prefixes []string `json:"prefixes"`
+	// Tail is what follows the prefix: one of the Tails, TailNumber when
+	// it's not said. A ws that doesn't know a tail reads none of that
+	// kind's names.
+	Tail string `json:"tail,omitempty"`
+	// Address is where one is outside ws, with RefPlaceholder where its
+	// name goes: https://acme.atlassian.net/browse/{ref}. ws links a name
+	// to it in a document, and reads one pasted as the thing it names.
+	Address string `json:"address,omitempty"`
+	// Path is where one opens in the plugin's app, with RefPlaceholder
+	// where its name goes: /issue/{ref}.
+	Path string `json:"path,omitempty"`
+}
+
+// RefPlaceholder is where a thing's name goes in a Ref's Address and Path.
+const RefPlaceholder = "{ref}"
+
+// The tails of a name: what follows its prefix.
+const (
+	// TailNumber is a whole number that doesn't start with 0, of up to
+	// nine digits: RAM-123.
+	TailNumber = "number"
+)
+
+var (
+	refKind   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	refPrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,30}-$`)
+)
+
+// Problem says what's wrong with a ref as it's registered, or "": ws
+// leaves out one with a problem, and the framework won't declare it.
+func (r Ref) Problem() string {
+	switch {
+	case !refKind.MatchString(r.Kind):
+		return fmt.Sprintf("its kind %q must be lower-case letters, digits and hyphens, starting with a letter", r.Kind)
+	case len(r.Prefixes) == 0:
+		return "it has no prefixes: nothing would be named by it"
+	}
+	for _, p := range r.Prefixes {
+		if !refPrefix.MatchString(p) {
+			return fmt.Sprintf("its prefix %q must be letters, digits and underscores, starting with a letter and ending in a hyphen (RAM-)", p)
+		}
+	}
+	if r.Address != "" {
+		u, err := url.Parse(strings.Replace(r.Address, RefPlaceholder, "X-1", 1))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.Count(r.Address, RefPlaceholder) != 1 {
+			return fmt.Sprintf("its address %q must be an http or https address with %s once, where the name goes", r.Address, RefPlaceholder)
+		}
+		if strings.Contains(u.Host, "X-1") || strings.ContainsAny(r.Address, " \t\n") {
+			return fmt.Sprintf("its address %q must have %s after its host", r.Address, RefPlaceholder)
+		}
+	}
+	if r.Path != "" && (!strings.HasPrefix(r.Path, "/") || strings.HasPrefix(r.Path, "//") || strings.Count(r.Path, RefPlaceholder) != 1) {
+		return fmt.Sprintf("its path %q must be a path in the plugin's app (/issue/%s) with %s once", r.Path, RefPlaceholder, RefPlaceholder)
+	}
+	return ""
+}
+
+// RefShowParams asks about one thing: its Ref's kind, and its name as it
+// was written. Full: everything was asked for (ws show --full), so nothing
+// is to be left out of the markdown.
+type RefShowParams struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+	Full bool   `json:"full,omitempty"`
+}
+
+// RefShowResult is a thing as ws shows it: in a card under its name, and
+// as ws show prints it for a person or an agent. One the plugin has
+// nothing by that name for is answered CodeNotFound.
+type RefShowResult struct {
+	Title string `json:"title"`
+	// State is where it stands, in the plugin's words: In Progress.
+	State string `json:"state,omitempty"`
+	// Fields are a few things worth saying of it in a line each: who has
+	// it, how pressing it is.
+	Fields []RefField `json:"fields,omitempty"`
+	// Markdown is what it says, for ws show: its description, what's
+	// been said on it. ws says where it came from before it: it's read
+	// as information, not as instructions.
+	Markdown string `json:"markdown,omitempty"`
+}
+
+// RefField is one thing said of a thing: Assignee, Dana.
+type RefField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // The types of a config key.
@@ -301,8 +414,9 @@ const (
 	MethodRepoList    = "repo/list"    // nothing → RepoListResult
 )
 
-// CodeNotFound is ws's answer for something asked for by name that it
-// hasn't: a mission with no such slug.
+// CodeNotFound is the answer for something asked for by name that isn't
+// there: ws's for a mission with no such slug, a plugin's for a ref it has
+// nothing by.
 const CodeNotFound = -32001
 
 // The states of a mission. One that's ended is landed, answered,

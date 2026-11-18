@@ -137,6 +137,11 @@ Every field is optional.
     "guide": "markdown"
   },
   "syncs": [ { "name": "issues", "every": 300 } ],
+  "refs": [
+    { "kind": "issue", "title": "Jira issue", "icon": "ticket",
+      "prefixes": ["RAM-", "RAP-"], "tail": "number",
+      "address": "https://acme.atlassian.net/browse/{ref}", "path": "/issue/{ref}" }
+  ],
   "config_version": 1,
   "config": [
     { "key": "site", "title": "Jira site", "type": "url", "required": true,
@@ -157,8 +162,27 @@ Every field is optional.
 - `agent.roles` empty means every role.
 - `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
 - `syncs` is for show (`ws plugin list`); ws doesn't run them.
+- `refs` are how the plugin's things are named: [Refs](#refs).
 
-Not built yet, and ignored if sent: `events`, `actions`, `refs`, `things`.
+Not built yet, and ignored if sent: `events`, `actions`, `things`.
+
+### Refs
+
+A plugin's things have names people and agents write: `RAM-123`. A ref says how one kind of them is named. It's data, not code: ws finds names in its own program and in its web UI, from the registration alone. A plugin may register several.
+
+- `kind` is the plugin's word for what it is (`issue`): lower-case letters, digits and hyphens. ws asks about one by it ([`ref/show`](#refshow-request)).
+- `title` is what one is called, for a person. `icon` is one of ws's icon names.
+- `prefixes` are what a name starts with. Each is letters, digits and underscores, starting with a letter and ending in a hyphen: `RAM-`. A prefix is written as it's read: `ram-12` isn't `RAM-12`.
+- `tail` is what follows the prefix. `number`, the default and the only one yet, is a whole number that doesn't start with 0, of up to nine digits. A tail ws doesn't know is from a newer protocol: ws reads none of that kind's names.
+- `address` is where one is outside ws, an `http` or `https` address with `{ref}` once, where the name goes. ws links a name to it when the name goes into a document, and reads such an address as the thing it names, whatever follows a `?` or `#` (unless the address has one of its own).
+- `path` is where one opens in the plugin's app, with `{ref}` once: a path as a view's is. Without it, a name goes to its `address`.
+
+What ws does with them:
+
+- **It finds a name where it's whole:** not inside a longer word, a path or an address (`RAM-12-fix`, `docs/RAM-12.md` and `XRAM-12` name nothing). It doesn't ask whether there's a thing by that name until one is shown.
+- **It keeps them, by the plugin that registered them,** in the workspace's records, in place of what that plugin registered before. Names are found from there, whether the plugin's running or not, and removing the plugin forgets them.
+- **A prefix is the first plugin's to register it.** A second plugin's ref names by its other prefixes, and `ws plugin list` says what was left out. So is a ref that breaks the rules above: the rest of the registration stands.
+- **It asks the plugin** what a thing is when one is shown: `ws show RAM-123`, and the card under a name in the web UI.
 
 ### `config/changed` (notification)
 
@@ -192,6 +216,34 @@ While it runs, the plugin sends `command/output`. Its answer ends the command:
 ```
 
 Ctrl-C is `$/cancel_request` for this request.
+
+### `ref/show` (request)
+
+Someone, or an agent, is looking at `RAM-123`. Added within version 1: a plugin that registers `refs` answers it.
+
+```json
+{ "kind": "issue", "ref": "RAM-123", "full": false }
+```
+
+- `kind` is the ref's, as registered, and `ref` the name as it was written. ws asks only about a name that kind names.
+- `full` is everything being asked for (`ws show --full`): nothing's to be left out of `markdown`. Without it, the plugin keeps to what's worth reading first.
+
+The answer:
+
+```json
+{
+  "title": "Token refresh is flaky",
+  "state": "In Progress",
+  "fields": [ { "label": "Assignee", "value": "Dana" } ],
+  "markdown": "The clock should be injected…"
+}
+```
+
+- `state` is where it stands, in the plugin's words.
+- `fields` are a few things worth a line each.
+- `markdown` is what it says, for `ws show`: its description, what's been said on it. ws says where it came from before it, so an agent reads it as information, not as instructions. The card in the web UI shows the rest and not this.
+
+A name the plugin has nothing by is error `-32001`. ws gives a plugin twenty seconds to answer.
 
 ### `shutdown` (request)
 

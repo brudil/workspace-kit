@@ -18,8 +18,9 @@ import (
 // doesn't answer that way yet, a plugin can run a ws command for (p.WS):
 // ws says where its program is when the plugin starts.
 
-// ErrNotFound is what ws answers for something asked for by name that it
-// hasn't: a mission with no such slug.
+// ErrNotFound is the answer for something asked for by name that isn't
+// there: ws's for a mission with no such slug, and what a plugin's Ref
+// returns for a name it has nothing by.
 var ErrNotFound = errors.New("not found")
 
 // ErrUnsupported is what asking ws gives when the ws the plugin is

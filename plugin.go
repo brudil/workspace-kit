@@ -73,6 +73,7 @@ type Plugin struct {
 	uiDir       string // the folder of files that holds the app, as built
 	routes      []route
 	syncs       []*syncer
+	refs        []*Ref
 	setups      []func()
 	onConfig    []func()
 	guide       string
@@ -253,6 +254,19 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 		p.running.Add(1)
 		defer p.running.Done()
 		return protocol.CommandRunResult{Exit: p.runCommand(ctx, in)}, nil
+	case protocol.MethodRefShow:
+		var in protocol.RefShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		return p.showRef(ctx, in)
 	case protocol.MethodShutdown:
 		// Commands being run get a moment to finish and be answered.
 		finished := make(chan struct{})
@@ -349,6 +363,9 @@ func (p *Plugin) prepare() (protocol.Registration, error) {
 		p.declErrs = append(p.declErrs, err)
 	}
 	p.addSyncCommand()
+	if _, errs := p.refsDeclared(); len(errs) > 0 {
+		p.declErrs = append(p.declErrs, errs...)
+	}
 	if len(p.declErrs) > 0 {
 		return protocol.Registration{}, errors.Join(p.declErrs...)
 	}
@@ -375,6 +392,7 @@ func (p *Plugin) registration() protocol.Registration {
 	for _, s := range p.syncs {
 		reg.Syncs = append(reg.Syncs, protocol.Sync{Name: s.name, Every: int(s.every / time.Second)})
 	}
+	reg.Refs, _ = p.refsDeclared()
 	reg.Config = p.Config.spec()
 	return reg
 }

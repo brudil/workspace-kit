@@ -18,6 +18,7 @@ package plugintest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -290,6 +291,20 @@ func (ws *WS) Repos(repos ...protocol.Repo) {
 		}
 		return protocol.RepoListResult{Repos: repos}, nil
 	})
+}
+
+// Show asks the plugin what one of its things is, as ws does when a name
+// it registered is shown (ws show RAM-123, the card under a name): kind
+// is the Ref's, name the thing's as written. A name the plugin has
+// nothing by is plugin.ErrNotFound.
+func (ws *WS) Show(kind, name string, full bool) (protocol.RefShowResult, error) {
+	var out protocol.RefShowResult
+	err := ws.conn.Call(context.Background(), protocol.MethodRefShow, protocol.RefShowParams{Kind: kind, Ref: name, Full: full}, &out)
+	var e *rpc.Error
+	if errors.As(err, &e) && e.Code == protocol.CodeNotFound {
+		return out, fmt.Errorf("%s: %w", e.Message, plugin.ErrNotFound)
+	}
+	return out, err
 }
 
 // Protocol is the version of the plugin protocol the handshake chose.

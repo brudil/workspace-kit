@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/withworkspace/plugin/protocol"
@@ -59,6 +60,35 @@ func TestCommandNameIsTheWordAfterWS(t *testing.T) {
 	} {
 		if got := c.r.CommandName("jira"); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.r.Commands, got, c.want)
+		}
+	}
+}
+
+func TestARefsProblem(t *testing.T) {
+	ok := protocol.Ref{Kind: "issue", Prefixes: []string{"RAM-", "sc_2-"}, Address: "https://acme.atlassian.net/browse/{ref}", Path: "/issue/{ref}"}
+	if p := ok.Problem(); p != "" {
+		t.Errorf("%+v: %s", ok, p)
+	}
+	if p := (protocol.Ref{Kind: "issue", Prefixes: []string{"RAM-"}, Tail: "hex"}).Problem(); p != "" {
+		t.Errorf("a tail this release doesn't know is a newer one, not a problem: %s", p)
+	}
+	for why, r := range map[string]protocol.Ref{
+		"its kind":      {Kind: "Issue", Prefixes: []string{"RAM-"}},
+		"no prefixes":   {Kind: "issue"},
+		`prefix "RAM"`:  {Kind: "issue", Prefixes: []string{"RAM"}},         // no hyphen: RAM12 is a word
+		`prefix "-"`:    {Kind: "issue", Prefixes: []string{"-"}},           // nothing before it
+		`prefix "t#"`:   {Kind: "issue", Prefixes: []string{"t#"}},          // ws's own: a pull request
+		`prefix "a/b-"`: {Kind: "issue", Prefixes: []string{"a/b-"}},        // ws's own: a file
+		`prefix "9a-"`:  {Kind: "issue", Prefixes: []string{"RAM-", "9a-"}}, // starts with a digit
+		"its address":   {Kind: "issue", Prefixes: []string{"RAM-"}, Address: "https://acme.atlassian.net/browse/"},
+		`address "ftp`:  {Kind: "issue", Prefixes: []string{"RAM-"}, Address: "ftp://acme/{ref}"},
+		`address "http`: {Kind: "issue", Prefixes: []string{"RAM-"}, Address: "https://{ref}.atlassian.net/"},
+		`address "/`:    {Kind: "issue", Prefixes: []string{"RAM-"}, Address: "/browse/{ref}"},
+		"its path":      {Kind: "issue", Prefixes: []string{"RAM-"}, Path: "/issue"},
+		`path "//`:      {Kind: "issue", Prefixes: []string{"RAM-"}, Path: "//x/{ref}"},
+	} {
+		if p := r.Problem(); !strings.Contains(p, why) {
+			t.Errorf("%+v: %q, want it to say %q", r, p, why)
 		}
 	}
 }

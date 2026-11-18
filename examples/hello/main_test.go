@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/withworkspace/plugin"
 	"github.com/withworkspace/plugin/plugintest"
 	"github.com/withworkspace/plugin/protocol"
 )
@@ -52,6 +54,18 @@ func TestHello(t *testing.T) {
 	}
 	if got := ws.Run("visits"); got.Stdout != "Visits:  3\n" {
 		t.Errorf("visits: %+v", got)
+	}
+
+	// Each visit has a name, which ws finds in what's written and asks
+	// about: one that's there is shown, and one that isn't is said to be.
+	if refs := reg.Refs; len(refs) != 1 || refs[0].Kind != "visit" || refs[0].Prefixes[0] != "VISIT-" {
+		t.Errorf("refs registered: %+v", refs)
+	}
+	if got, err := ws.Show("visit", "VISIT-3", false); err != nil || got.Title != "Visit 3" || len(got.Fields) != 1 || !strings.Contains(got.Markdown, "said: Hello.") {
+		t.Errorf("VISIT-3: %+v, %v", got, err)
+	}
+	if _, err := ws.Show("visit", "VISIT-4", false); !errors.Is(err, plugin.ErrNotFound) {
+		t.Errorf("VISIT-4, which hasn't happened: %v", err)
 	}
 
 	// A change of config reaches the next read, with no restart, and the
