@@ -21,6 +21,7 @@ import (
 	"github.com/withworkspace/plugin"
 	"github.com/withworkspace/plugin/plugintest"
 	"github.com/withworkspace/plugin/protocol"
+	"github.com/withworkspace/plugin/ui"
 )
 
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
@@ -58,6 +59,13 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		p.View("Board", plugin.At("/board"))
 		p.Command("mine", "Issues assigned to you", func(*plugin.Call) error { return nil }).Args("[PROJECT]")
 		p.Sync("issues", 5*time.Minute, func(context.Context) error { return nil })
+		p.Ref("issue", "Jira issue").
+			Prefix("RAM-", "RAP-").Address("https://acme.atlassian.net/browse/{ref}").Opens("/issue/{ref}").Icon("ticket").
+			Fields(plugin.Title("title"), plugin.State("status", "Status"), plugin.Text("assignee", "Assignee"), plugin.Time("updated"), plugin.Markdown("body")).
+			Search(plugin.All("title"), plugin.All(ui.Key), plugin.Upto("body", 10000)).
+			Card(ui.Title("title"), ui.Subtitle(ui.Key), ui.Badge("status")).
+			Pane(ui.Title("title"), ui.Badge("status"), ui.Field("assignee").Label("Who"), ui.Markdown("body").Lines(12))
+		p.Ref("sprint", "").Prefix("SPRINT-")
 		p.Guide("", "crew", "orchestrator")
 	}, plugintest.Name("jira"), plugintest.Config(map[string]any{"site": "https://x", "token": "t"}))
 
@@ -70,6 +78,15 @@ func TestRegistrationIsWhatWasDeclared(t *testing.T) {
 		`{"name":"sync","short":"Fetch what's new now","args":"[NAME...]"}]},` +
 		`"agent":{"roles":["crew","orchestrator"],"guide":"Use ` + "`ws jira mine`" + `.\n"},` +
 		`"syncs":[{"name":"issues","every":300}],` +
+		`"refs":[{"kind":"issue","title":"Jira issue","icon":"ticket","prefixes":["RAM-","RAP-"],` +
+		`"address":"https://acme.atlassian.net/browse/{ref}","path":"/issue/{ref}",` +
+		`"fields":[{"name":"title","type":"title"},{"name":"status","type":"state","label":"Status"},` +
+		`{"name":"assignee","type":"text","label":"Assignee"},{"name":"updated","type":"time"},{"name":"body","type":"markdown"}],` +
+		`"search":[{"field":"title"},{"field":"key"},{"field":"body","max":10000}],` +
+		`"views":{"card":[{"block":"title","field":"title"},{"block":"subtitle","field":"key"},{"block":"badge","field":"status"}],` +
+		`"pane":[{"block":"title","field":"title"},{"block":"badge","field":"status"},` +
+		`{"block":"field","field":"assignee","label":"Who"},{"block":"markdown","field":"body","lines":12}]}},` +
+		`{"kind":"sprint","prefixes":["SPRINT-"]}],` +
 		`"config_version":2,` +
 		`"config":[` +
 		`{"key":"site","title":"Jira site","type":"url","required":true,"example":"https://acme.atlassian.net"},` +
@@ -123,6 +140,82 @@ func TestAPluginThatDeclaresWronglyDoesNotStart(t *testing.T) {
 				p.Command("a", "", func(*plugin.Call) error { return nil })
 			},
 			why: "declared twice",
+		},
+		"a ref declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-")
+				p.Ref("issue", "").Prefix("RAP-")
+			},
+			why: "declared twice",
+		},
+		"a ref that names nothing": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "") },
+			why:   "it has no prefixes",
+		},
+		"a ref whose prefix is ws's own kind of name": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("demo#") },
+			why:   `its prefix "demo#"`,
+		},
+		"a ref whose address has nowhere for the name": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Address("https://acme.atlassian.net/browse/")
+			},
+			why: "its address",
+		},
+		"a ref that opens at a path that isn't one": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("RAM-").Opens("issue/{ref}") },
+			why:   "its path",
+		},
+		"a ref whose things have nothing they're called": {
+			setup: func(p *plugin.Plugin) { p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Text("summary")) },
+			why:   "0 fields of type title",
+		},
+		"a ref with two titles": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("summary"), plugin.Title("name"))
+			},
+			why: "2 fields of type title",
+		},
+		"a ref with a field twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title"), plugin.Text("title"))
+			},
+			why: `its field "title" is there twice`,
+		},
+		"a ref that takes the key for a field": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title"), plugin.Text(ui.Key))
+			},
+			why: `its field "key" is every thing's own`,
+		},
+		"a ref found by a field it hasn't": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title")).Search(plugin.All("body"))
+			},
+			why: `it's found by "body"`,
+		},
+		"a ref whose view shows a field it hasn't": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Fields(plugin.Title("title")).Card(ui.Title("title"), ui.Badge("status"))
+			},
+			why: `its view card shows "status"`,
+		},
+		"an action declared twice": {
+			setup: func(p *plugin.Plugin) {
+				p.Action("sync", "Sync", func(*plugin.Act) error { return nil })
+				p.Action("sync", "Sync again", func(*plugin.Act) error { return nil })
+			},
+			why: `its action "sync" is there twice`,
+		},
+		"an action with nothing that does it": {
+			setup: func(p *plugin.Plugin) { p.Action("sync", "Sync", nil) },
+			why:   "has nothing that does it",
+		},
+		"an action on a thing with no title": {
+			setup: func(p *plugin.Plugin) {
+				p.Ref("issue", "").Prefix("RAM-").Action("move", " ", func(*plugin.Act) error { return nil })
+			},
+			why: `its action "move" has no title`,
 		},
 		"a config key declared twice": {
 			setup: func(p *plugin.Plugin) {
@@ -766,6 +859,155 @@ func TestAskingWS(t *testing.T) {
 
 // --- the protocol's version ---
 
+// --- refs ---
+
+// issues is a kind of thing as a plugin declares one: named RAM-n, made
+// of a title, a status, an assignee and a body.
+func issues(p *plugin.Plugin) *plugin.Ref {
+	return p.Ref("issue", "Jira issue").Prefix("RAM-").
+		Fields(plugin.Title("title"), plugin.State("status"), plugin.Text("assignee", "Assignee"), plugin.Markdown("body"))
+}
+
+func TestWSAsksWhatANameIs(t *testing.T) {
+	when := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		issues(p).Show(func(_ context.Context, a plugin.Asked) (plugin.Thing, error) {
+			switch a.Name {
+			case "RAM-1":
+				body := "The clock should be injected."
+				if a.Full {
+					body += "\n\n## Comments\n\nDana: agreed."
+				}
+				return plugin.Thing{Name: a.Name, Changed: when, Fields: map[string]string{"title": "Token refresh is flaky", "status": "In Progress", "assignee": "Dana", "body": body}}, nil
+			case "RAM-2":
+				panic("the issue's gone wrong")
+			}
+			return plugin.Thing{}, plugin.ErrNotFound
+		})
+		// A kind that says no more than it's told ws.
+		p.Ref("sprint", "Sprint").Prefix("SPRINT-").Fields(plugin.Title("name"))
+	})
+
+	got, err := ws.Show("issue", "RAM-1", false)
+	want := map[string]string{"title": "Token refresh is flaky", "status": "In Progress", "assignee": "Dana", "body": "The clock should be injected."}
+	if err != nil || fmt.Sprint(got.Fields) != fmt.Sprint(want) || !got.Changed.Equal(when) {
+		t.Errorf("RAM-1: %+v, %v; want %v", got, err, want)
+	}
+	// Everything, when everything's asked for.
+	if got, err := ws.Show("issue", "RAM-1", true); err != nil || !strings.Contains(got.Fields["body"], "Dana: agreed.") {
+		t.Errorf("RAM-1 in full: %+v, %v", got, err)
+	}
+	// A name the plugin has nothing by is said to be, not failed on.
+	if _, err := ws.Show("issue", "RAM-9", false); !errors.Is(err, plugin.ErrNotFound) || !strings.Contains(err.Error(), "there's no issue RAM-9") {
+		t.Errorf("RAM-9: %v, want not found", err)
+	}
+	// A handler that panics fails its own answer, and the plugin runs on.
+	if _, err := ws.Show("issue", "RAM-2", false); err == nil || !strings.Contains(err.Error(), "gone wrong") {
+		t.Errorf("RAM-2: %v, want what went wrong", err)
+	}
+	if _, err := ws.Show("epic", "EPIC-1", false); err == nil || !strings.Contains(err.Error(), `no ref called "epic"`) {
+		t.Errorf("a kind that isn't registered: %v", err)
+	}
+	// A kind with nothing to show one answers as if it couldn't be
+	// asked: ws shows what it was told.
+	if _, err := ws.Show("sprint", "SPRINT-1", false); err == nil || !strings.Contains(err.Error(), protocol.MethodRefShow) {
+		t.Errorf("a kind with no Show: %v", err)
+	}
+	if _, err := ws.Show("issue", "RAM-1", false); err != nil {
+		t.Errorf("after all that: %v", err)
+	}
+}
+
+// What a ref's names follow is usually config: declared in Setup, a
+// change to it starts the plugin afresh, and it registers them again.
+func TestRefsFollowConfig(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		projects := p.Config.List("projects", "Projects")
+		p.Setup(func() {
+			r := p.Ref("issue", "Issue")
+			for _, key := range projects.Get() {
+				r.Prefix(key + "-")
+			}
+		})
+	}, plugintest.Config(map[string]any{"projects": []string{"RAM", "RAP"}}))
+	refs := ws.Registration().Refs
+	if len(refs) != 1 || strings.Join(refs[0].Prefixes, " ") != "RAM- RAP-" {
+		t.Errorf("refs: %+v", refs)
+	}
+}
+
+// A plugin tells ws of its things, so ws has them without asking: all of
+// a kind at once (what's gone is forgotten), or some.
+func TestAPluginTellsWSOfItsThings(t *testing.T) {
+	var issue *plugin.Ref
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) { issue = issues(p) })
+	ctx := context.Background()
+	names := func() string {
+		var out []string
+		for _, th := range ws.Things("issue") {
+			out = append(out, th.Ref+"="+th.Fields["title"])
+		}
+		return strings.Join(out, " ")
+	}
+	titled := func(name, title string) plugin.Thing {
+		return plugin.Thing{Name: name, Fields: map[string]string{"title": title}}
+	}
+	when := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+
+	one := plugin.Thing{Name: "RAM-1", Changed: when, Fields: map[string]string{"title": "One", "status": "Open", "body": "The first.", "colour": "not one of its fields"}}
+	if err := issue.Mirror(ctx, []plugin.Thing{one, titled("RAM-2", "Two")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-1=One RAM-2=Two" {
+		t.Errorf("mirrored: %s", got)
+	}
+	// As ws has it: what its kind has no field for isn't kept.
+	if th := ws.Things("issue")[0]; th.Kind != "issue" || !th.Changed.Equal(when) || fmt.Sprint(th.Fields) != fmt.Sprint(map[string]string{"title": "One", "status": "Open", "body": "The first."}) {
+		t.Errorf("RAM-1 as ws has it: %+v", th)
+	}
+	// All of them again: what's changed is put in place, and what's gone
+	// is forgotten.
+	if err := issue.Mirror(ctx, []plugin.Thing{titled("RAM-2", "Two, renamed"), titled("RAM-3", "Three")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-2=Two, renamed RAM-3=Three" {
+		t.Errorf("mirrored again: %s", got)
+	}
+	// Some: the rest stay.
+	if err := issue.Put(ctx, titled("RAM-4", "Four")); err != nil {
+		t.Fatal(err)
+	}
+	if err := issue.Remove(ctx, "RAM-2", "RAM-9"); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != "RAM-3=Three RAM-4=Four" {
+		t.Errorf("after a put and a remove: %s", got)
+	}
+	// What ws won't keep is said, and the rest is kept.
+	err := issue.Mirror(ctx, []plugin.Thing{titled("RAM-3", "Three"), titled("ram-5", "Five"), {Name: "RAM-6", Fields: map[string]string{"status": "Open"}}})
+	var refused *plugin.Refused
+	if !errors.As(err, &refused) || len(refused.Things) != 2 || !strings.Contains(err.Error(), "ram-5: it isn't one of issue's names") || !strings.Contains(err.Error(), "RAM-6: it has nothing for title, its title") {
+		t.Errorf("refused: %v", err)
+	}
+	if got := names(); got != "RAM-3=Three" {
+		t.Errorf("after a mirror with some refused: %s", got)
+	}
+	// More than ws takes at once goes in turn.
+	many := make([]plugin.Thing, protocol.ThingsAtOnce+7)
+	for i := range many {
+		many[i] = titled(fmt.Sprintf("RAM-%d", i+1), "One of many")
+	}
+	if err := issue.Mirror(ctx, many); err != nil || len(ws.Things("issue")) != len(many) {
+		t.Errorf("many: %d kept, %v", len(ws.Things("issue")), err)
+	}
+
+	// A ws from before it could be told says so.
+	ws.Answer(protocol.MethodThingList, func(json.RawMessage) (any, error) { return nil, plugintest.NoMethod(protocol.MethodThingList) })
+	if err := issue.Mirror(ctx, nil); !errors.Is(err, plugin.ErrUnsupported) {
+		t.Errorf("a ws that can't be told: %v", err)
+	}
+}
+
 func TestTheHandshakeChoosesTheHighestBothSpeak(t *testing.T) {
 	declare := func(p *plugin.Plugin) { p.Command("hi", "", func(c *plugin.Call) error { return c.Say("hi") }) }
 	if ws := plugintest.New(t, nil, declare); ws.Protocol() != protocol.Version {
@@ -877,5 +1119,111 @@ func TestWS(t *testing.T) {
 	plugintest.New(t, nil, func(pl *plugin.Plugin) { bare = pl })
 	if _, err := bare.WS(context.Background(), "show"); !errors.Is(err, plugin.ErrNoWS) {
 		t.Errorf("with no ws: %v", err)
+	}
+}
+
+// --- actions ---
+
+// A plugin's actions are run from Find: its own, and what's done to one
+// of its things. One that asks is run again with what's answered, from
+// the start, and does nothing until it's asked all it wants.
+func TestActionsAskAndThenDo(t *testing.T) {
+	var moved, made []string
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		issues(p).Action("move", "Move to…", func(a *plugin.Act) error {
+			to, err := a.Pick("Move "+a.Name+" to", plugin.Choices("To Do", "In Progress")...)
+			if err != nil {
+				return err
+			}
+			why, err := a.Ask("Why?", "A line")
+			if err != nil {
+				return err
+			}
+			moved = append(moved, a.Name+" to "+to+": "+why)
+			return a.Say(a.Name + " is " + to)
+		}).Action("open", "Open it", func(a *plugin.Act) error {
+			a.Open("/issue/" + a.Name)
+			return nil
+		})
+		p.Action("new", "New issue…", func(a *plugin.Act) error {
+			title, err := a.Ask("What's the issue?", "A title")
+			if err != nil {
+				return err
+			}
+			if title == "boom" {
+				panic("it went wrong")
+			}
+			made = append(made, title)
+			a.Open("/issue/RAM-9")
+			return a.Say("Created RAM-9")
+		}).Icon("plus").Hint("In Jira")
+		p.Action("sync", "Sync now", func(a *plugin.Act) error { return errors.New("401 from Jira") })
+	})
+
+	reg := ws.Registration()
+	got, _ := json.Marshal(reg.Actions)
+	if string(got) != `[{"id":"new","title":"New issue…","icon":"plus","hint":"In Jira"},{"id":"sync","title":"Sync now"}]` {
+		t.Errorf("the plugin's own: %s", got)
+	}
+	got, _ = json.Marshal(reg.Refs[0].Actions)
+	if string(got) != `[{"id":"move","title":"Move to…"},{"id":"open","title":"Open it"}]` {
+		t.Errorf("an issue's: %s", got)
+	}
+
+	// On a thing: asked a pick, then a line, then done, once.
+	r, err := ws.ActOn("issue", "RAM-1", "move")
+	if err != nil || r.Ask == nil || r.Ask.Type != protocol.AskPick || r.Ask.Title != "Move RAM-1 to" || len(r.Ask.Options) != 2 || r.Ask.Options[1].Value != "In Progress" || len(moved) != 0 {
+		t.Fatalf("first: %+v, %v, moved %v", r, err, moved)
+	}
+	r, err = ws.ActOn("issue", "RAM-1", "move", "In Progress")
+	if err != nil || r.Ask == nil || r.Ask.Type != protocol.AskText || r.Ask.Placeholder != "A line" || len(moved) != 0 {
+		t.Fatalf("second: %+v, %v, moved %v", r, err, moved)
+	}
+	r, err = ws.ActOn("issue", "RAM-1", "move", "In Progress", "It's started")
+	if err != nil || r.Ask != nil || r.Say != "RAM-1 is In Progress" || len(moved) != 1 || moved[0] != "RAM-1 to In Progress: It's started" {
+		t.Fatalf("third: %+v, %v, moved %v", r, err, moved)
+	}
+	if r, err := ws.ActOn("issue", "RAM-2", "open"); err != nil || r.Open != "/issue/RAM-2" {
+		t.Errorf("open: %+v, %v", r, err)
+	}
+
+	// The plugin's own.
+	if r, err := ws.Act("new"); err != nil || r.Ask == nil || r.Ask.Title != "What's the issue?" {
+		t.Errorf("new, unanswered: %+v, %v", r, err)
+	}
+	if r, err := ws.Act("new", "The clock"); err != nil || r.Say != "Created RAM-9" || r.Open != "/issue/RAM-9" || len(made) != 1 {
+		t.Errorf("new, answered: %+v, %v, made %v", r, err, made)
+	}
+	// One that fails says why; one that panics fails its own run; one
+	// that isn't there, or isn't that kind's, is said.
+	if _, err := ws.Act("sync"); err == nil || !strings.Contains(err.Error(), "401 from Jira") {
+		t.Errorf("sync: %v", err)
+	}
+	if _, err := ws.Act("new", "boom"); err == nil || !strings.Contains(err.Error(), "went wrong") {
+		t.Errorf("a panic: %v", err)
+	}
+	for _, run := range []func() (protocol.ActionRunResult, error){
+		func() (protocol.ActionRunResult, error) { return ws.Act("move") },
+		func() (protocol.ActionRunResult, error) { return ws.ActOn("issue", "RAM-1", "new") },
+		func() (protocol.ActionRunResult, error) { return ws.ActOn("sprint", "SPRINT-1", "move") },
+	} {
+		if _, err := run(); err == nil || !strings.Contains(err.Error(), "no action called") {
+			t.Errorf("one that isn't there: %v", err)
+		}
+	}
+	if r, err := ws.Act("new", "After all that"); err != nil || r.Say == "" {
+		t.Errorf("after all that: %+v, %v", r, err)
+	}
+}
+
+// A field that names other things says how it points at them.
+func TestAFieldNamesOtherThings(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Ref("issue", "Issue").Prefix("RAM-").Fields(plugin.Title("title"),
+			plugin.Names("parent", "Parent", protocol.LinkIn), plugin.NamesSeveral("links", "Links"))
+	})
+	got, _ := json.Marshal(ws.Registration().Refs[0].Fields[1:])
+	if string(got) != `[{"name":"parent","type":"ref","label":"Parent","link":"in"},{"name":"links","type":"refs","label":"Links"}]` {
+		t.Errorf("fields: %s", got)
 	}
 }

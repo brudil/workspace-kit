@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/withworkspace/plugin"
 	"github.com/withworkspace/plugin/plugintest"
 	"github.com/withworkspace/plugin/protocol"
 )
@@ -52,6 +54,31 @@ func TestHello(t *testing.T) {
 	}
 	if got := ws.Run("visits"); got.Stdout != "Visits:  3\n" {
 		t.Errorf("visits: %+v", got)
+	}
+
+	// Each visit has a name, which ws finds in what's written, and is
+	// made of what the plugin says: one that's there is shown, and one
+	// that isn't is said to be.
+	if refs := reg.Refs; len(refs) != 1 || refs[0].Kind != "visit" || refs[0].Prefixes[0] != "VISIT-" || len(refs[0].Fields) != 3 || len(refs[0].Views["pane"]) != 4 {
+		t.Errorf("refs registered: %+v", refs)
+	}
+	if got, err := ws.Show("visit", "VISIT-3", false); err != nil || got.Fields["title"] != "Visit 3" || got.Fields["at"] == "" || !strings.Contains(got.Fields["said"], "said: **Hello**.") {
+		t.Errorf("VISIT-3: %+v, %v", got, err)
+	}
+	if _, err := ws.Show("visit", "VISIT-4", false); !errors.Is(err, plugin.ErrNotFound) {
+		t.Errorf("VISIT-4, which hasn't happened: %v", err)
+	}
+	// ws was told of each as it happened: it has them without asking.
+	if told := ws.Things("visit"); len(told) != 3 || told[2].Ref != "VISIT-3" || told[2].Fields["title"] != "Visit 3" {
+		t.Errorf("visits ws was told of: %+v", told)
+	}
+
+	// Something to do, from Find: it asks, then says.
+	if r, err := ws.Act("greet"); err != nil || r.Ask == nil || r.Ask.Type != protocol.AskText {
+		t.Errorf("greet, unanswered: %+v, %v", r, err)
+	}
+	if r, err := ws.Act("greet", "Ada"); err != nil || r.Say != "Hello, Ada" {
+		t.Errorf("greet, answered: %+v, %v", r, err)
 	}
 
 	// A change of config reaches the next read, with no restart, and the
