@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -690,6 +691,63 @@ func TestNothingIsDeclaredOnceRunning(t *testing.T) {
 	})
 	if got := ws.Run("late"); got.Exit != 1 || !strings.Contains(got.Stderr, "after Run has started") {
 		t.Errorf("a command declared while running: %+v", got)
+	}
+}
+
+// --- the protocol's version ---
+
+func TestTheHandshakeChoosesTheHighestBothSpeak(t *testing.T) {
+	declare := func(p *plugin.Plugin) { p.Command("hi", "", func(c *plugin.Call) error { return c.Say("hi") }) }
+	if ws := plugintest.New(t, nil, declare); ws.Protocol() != protocol.Version {
+		t.Errorf("chose %d, want %d", ws.Protocol(), protocol.Version)
+	}
+	// A ws newer than the plugin, which still speaks what it does.
+	ws := plugintest.New(t, nil, declare, plugintest.Offer(1, 99))
+	if ws.Protocol() != 1 {
+		t.Errorf("a ws that speaks 1 and 99: chose %d", ws.Protocol())
+	}
+	if got := ws.Run("hi"); got.Exit != 0 || got.Stdout != "hi\n" {
+		t.Errorf("a command after the handshake: %+v", got)
+	}
+}
+
+// With none in common, the plugin registers nothing and says what it
+// speaks, so ws can say which side is behind.
+func TestNoVersionInCommonRegistersNothing(t *testing.T) {
+	var ran atomic.Bool
+	_, err := plugintest.Start(nil, func(p *plugin.Plugin) {
+		p.Setup(func() { ran.Store(true) })
+		p.Command("hi", "", func(*plugin.Call) error { return nil })
+	}, plugintest.Offer(99))
+	if err == nil || !strings.Contains(err.Error(), "version 0") || !strings.Contains(err.Error(), "[1]") || !strings.Contains(err.Error(), "[99]") {
+		t.Fatalf("started against a ws that speaks only 99: %v", err)
+	}
+	if ran.Load() {
+		t.Error("the plugin set itself up for a ws it can't speak to")
+	}
+}
+
+// A ws from before versions were chosen sends protocol 1 and no list,
+// and takes nothing but 1 in answer.
+func TestAWSFromBeforeVersionsWereChosen(t *testing.T) {
+	p := plugin.New(nil)
+	ws, plug := io.Pipe()
+	answers, out := io.Pipe()
+	go p.Serve(ws, out) //nolint:errcheck // ended by closing its input
+	defer plug.Close()
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":1,"ws":{"version":"0.3.0"},"plugin":{"name":"old","version":"0.0.0","dir":"` + t.TempDir() + `","data":"` + t.TempDir() + `"},"workspace":{"root":"/ws"},"config":{},"view":{"listen":"","base":"/plugins/old"}}}` + "\n"
+	if _, err := plug.Write([]byte(init)); err != nil {
+		t.Fatal(err)
+	}
+	var reply struct {
+		Result protocol.InitializeResult `json:"result"`
+		Error  json.RawMessage           `json:"error"`
+	}
+	if err := json.NewDecoder(answers).Decode(&reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Error != nil || reply.Result.Protocol != 1 {
+		t.Errorf("answered %+v, error %s", reply.Result, reply.Error)
 	}
 }
 

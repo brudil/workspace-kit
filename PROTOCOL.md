@@ -1,6 +1,6 @@
 # The plugin protocol
 
-How ws and a plugin talk. Version 1. The framework in this repo (`plugin`) speaks it for you; this is for ws's side, for a plugin in another language, and for settling an argument.
+How ws and a plugin talk. Version 1. The types for everything here are in [`protocol`](protocol/protocol.go) (`github.com/withworkspace/plugin/protocol`). The framework in this repo (`plugin`) speaks it for you; this is for ws's side, for a plugin in another language, and for settling an argument.
 
 This is what's built: where ws and this differ, one of them has a bug.
 
@@ -63,6 +63,16 @@ The plugin-dev plugin gives a new plugin the workflow that publishes this on a t
 - A method either side doesn't know is answered with `-32601` (requests) or dropped (notifications).
 - ws closing the plugin's stdin means: exit.
 
+## Versions
+
+- **The plugin protocol has a version of its own**, a whole number starting at 1. It isn't ws's version, the framework's, or the frame protocol's.
+- **Within a version, changes only add:** a new optional field, or a new method that the other side may not know. Removing something, changing what it means, or requiring what was optional makes a new version.
+- **Each side says every version it speaks,** in `initialize` and its answer, and the plugin picks the highest that both speak.
+- **ws keeps speaking old versions.** A plugin built for version 1 goes on working in a ws that has gone on to 2.
+- **`initialize`'s version fields hold across versions:** they're said before there's a version to say them in. A version may add fields to `initialize` and its answer, and nothing else.
+
+The framework's list is `protocol.Versions`, fixed in each release: `[1]` today.
+
 ## ws to the plugin
 
 ### `initialize` (request)
@@ -72,6 +82,7 @@ Always first, once.
 ```json
 {
   "protocol": 1,
+  "protocols": [1],
   "ws": { "version": "0.42.0", "executable": "/usr/local/bin/workspace" },
   "plugin": {
     "name": "jira",
@@ -85,6 +96,7 @@ Always first, once.
 }
 ```
 
+- `protocols` are the versions ws speaks, and `protocol` the newest of them. A ws from before versions were chosen sends only `protocol`, and speaks only that one. One that sends neither speaks 1.
 - `ws.executable` is ws's own program. A plugin reaches ws by running its commands, in the workspace's root: `<executable> show m12 -f llm`. ws's commands are its interface to a plugin as they are to anything else; there are no methods a plugin calls ws by yet.
 - `config` holds what's set, secrets included, by key. A key that isn't set is absent. Values are JSON: a string, a bool, a number, or an array of strings.
 - `view.listen` is a unix socket's path. A plugin that serves anything (its app's files, what its app asks it) listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
@@ -93,8 +105,12 @@ Always first, once.
 The answer:
 
 ```json
-{ "protocol": 1, "registration": { … } }
+{ "protocol": 1, "protocols": [1], "registration": { … } }
 ```
+
+- `protocol` is the version the plugin chose: the highest in both `protocols`. Everything after the answer is in it.
+- `protocols` are the versions the plugin speaks.
+- With none in common, the plugin answers `protocol` `0`, with its `protocols`, and registers nothing. ws doesn't use it, and says which side is behind: "Update ws" when the plugin's highest version is above ws's, and "Update the plugin" when it isn't. A plugin from before versions were chosen sends no `protocols`, and speaks only its `protocol`.
 
 A plugin must answer even when its config is incomplete. ws asks nothing more of it until what's required is set.
 
