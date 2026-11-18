@@ -8,10 +8,71 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/withworkspace/plugin/internal/rpc"
+	"github.com/withworkspace/plugin/protocol"
 )
 
-// A plugin reaches ws as anything else does: by running its commands. ws
-// says where its program is when the plugin starts.
+// A plugin asks ws what it knows over the connection they share, and gets
+// it in the protocol's types: p.Missions, p.Mission, p.Repos. What ws
+// doesn't answer that way yet, a plugin can run a ws command for (p.WS):
+// ws says where its program is when the plugin starts.
+
+// ErrNotFound is what ws answers for something asked for by name that it
+// hasn't: a mission with no such slug.
+var ErrNotFound = errors.New("not found")
+
+// ErrUnsupported is what asking ws gives when the ws the plugin is
+// running in is from before it could answer that.
+var ErrUnsupported = errors.New("this ws can't answer that: update ws")
+
+// Missions are the workspace's missions in play, and with archived, the
+// ones archived too: in play first.
+func (p *Plugin) Missions(ctx context.Context, archived bool) ([]protocol.Mission, error) {
+	var out protocol.MissionListResult
+	if err := p.ask(ctx, protocol.MethodMissionList, protocol.MissionListParams{Archived: archived}, &out); err != nil {
+		return nil, err
+	}
+	return out.Missions, nil
+}
+
+// Mission is a mission, by its slug, with its brief and plan. One that
+// isn't there is ErrNotFound.
+func (p *Plugin) Mission(ctx context.Context, slug string) (protocol.MissionDetail, error) {
+	var out protocol.MissionDetail
+	err := p.ask(ctx, protocol.MethodMissionShow, protocol.MissionShowParams{Slug: slug}, &out)
+	return out, err
+}
+
+// Repos are the workspace's repos, in ws's order, each with its capsules.
+func (p *Plugin) Repos(ctx context.Context) ([]protocol.Repo, error) {
+	var out protocol.RepoListResult
+	if err := p.ask(ctx, protocol.MethodRepoList, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return out.Repos, nil
+}
+
+// ask sends ws a request, and says what its answer's errors are.
+func (p *Plugin) ask(ctx context.Context, method string, params, result any) error {
+	p.mu.Lock()
+	conn := p.conn
+	p.mu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("%s: the plugin isn't connected to ws: it's asked once Run has started", method)
+	}
+	err := conn.Call(ctx, method, params, result)
+	var e *rpc.Error
+	if errors.As(err, &e) {
+		switch e.Code {
+		case protocol.CodeMethodNotFound:
+			return fmt.Errorf("ws %s can't answer %s: %w", p.where().WS.Version, method, ErrUnsupported)
+		case protocol.CodeNotFound:
+			return fmt.Errorf("%s: %w", e.Message, ErrNotFound)
+		}
+	}
+	return err
+}
 
 // ErrNoWS is what running a ws command gives when ws didn't say where its
 // program is: a ws from before it did, or a test's stand-in without one.

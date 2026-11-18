@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -691,6 +692,75 @@ func TestNothingIsDeclaredOnceRunning(t *testing.T) {
 	})
 	if got := ws.Run("late"); got.Exit != 1 || !strings.Contains(got.Stderr, "after Run has started") {
 		t.Errorf("a command declared while running: %+v", got)
+	}
+}
+
+// --- asking ws ---
+
+func TestAskingWS(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("missions", "", func(c *plugin.Call) error {
+			ms, err := p.Missions(c.Context(), c.Flag("all"))
+			if err != nil {
+				return err
+			}
+			for _, m := range ms {
+				fmt.Fprintln(c.Stdout(), m.Slug, m.State, m.Headline.Court)
+			}
+			return nil
+		}).Flag("all", "archived too")
+		p.Command("mission", "", func(c *plugin.Call) error {
+			m, err := p.Mission(c.Context(), c.Arg(0))
+			if errors.Is(err, plugin.ErrNotFound) {
+				return c.Say("none")
+			}
+			if err != nil {
+				return err
+			}
+			return c.Say(m.Title + ": " + m.Brief + " in " + m.Capsules[0].PullRequest.State)
+		}).Args("SLUG")
+		p.Command("repos", "", func(c *plugin.Call) error {
+			rs, err := p.Repos(c.Context())
+			if err != nil {
+				return err
+			}
+			for _, r := range rs {
+				fmt.Fprintln(c.Stdout(), r.Name, len(r.Capsules), r.Capsules[0].Mission)
+			}
+			return nil
+		})
+	})
+
+	// A ws from before these: each is ErrUnsupported, saying so.
+	if got := ws.Run("repos"); got.Exit == 0 || !strings.Contains(got.Stderr, "update ws") {
+		t.Errorf("repos of a ws that can't answer: %+v", got)
+	}
+
+	ws.Missions(
+		protocol.MissionDetail{
+			Mission: protocol.Mission{Slug: "token-cache", Title: "Token cache", State: protocol.MissionReview,
+				Headline: &protocol.Headline{Court: protocol.CourtYou, Text: "PR #12 waits on your review"},
+				Capsules: []protocol.MissionCapsule{{Repo: "api", Name: "token-cache", PullRequest: &protocol.PullRequest{Number: 12, State: "open"}}}},
+			Brief: "Cache tokens",
+		},
+		protocol.MissionDetail{Mission: protocol.Mission{Slug: "old", State: protocol.MissionArchived, Headline: &protocol.Headline{Court: protocol.CourtAgent}}},
+	)
+	ws.Repos(protocol.Repo{Name: "api", Capsules: []protocol.Capsule{{Name: "token-cache", Mission: "token-cache"}}})
+
+	if got := ws.Run("missions"); got.Stdout != "token-cache review you\n" {
+		t.Errorf("missions in play: %+v", got)
+	}
+	if got := ws.Run("missions", "--all"); got.Stdout != "token-cache review you\nold archived agent\n" {
+		t.Errorf("missions, archived too: %+v", got)
+	}
+	if got := ws.Run("mission", "token-cache"); got.Stdout != "Token cache: Cache tokens in open\n" {
+		t.Errorf("a mission: %+v", got)
+	}
+	if got := ws.Run("mission", "nope"); got.Stdout != "none\n" {
+		t.Errorf("a mission that isn't there: %+v", got)
+	}
+	if got := ws.Run("repos"); got.Stdout != "api 1 token-cache\n" {
+		t.Errorf("repos: %+v", got)
 	}
 }
 
