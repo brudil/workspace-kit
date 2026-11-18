@@ -51,11 +51,12 @@ type WS struct {
 	keep bool          // dir is the test's own: not removed
 	done chan struct{} // closed when the plugin stops
 
-	mu     sync.Mutex
-	seq    int
-	notes  []note
-	arrive chan struct{} // closed and remade whenever a notification comes
-	closed bool
+	mu      sync.Mutex
+	seq     int
+	notes   []note
+	answers map[string]func(json.RawMessage) (any, error)
+	arrive  chan struct{} // closed and remade whenever a notification comes
+	closed  bool
 }
 
 // note is a notification the plugin sent.
@@ -210,6 +211,16 @@ func encode(values map[string]any) (map[string]json.RawMessage, error) {
 // test to read.
 func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
 	ws.mu.Lock()
+	answer := ws.answers[method]
+	ws.mu.Unlock()
+	if answer != nil {
+		return answer(params)
+	}
+	if !notifications[method] {
+		// A request it wasn't told how to answer: as a ws from before it.
+		return nil, rpc.MethodNotFound(method)
+	}
+	ws.mu.Lock()
 	ws.notes = append(ws.notes, note{method, params})
 	close(ws.arrive)
 	ws.arrive = make(chan struct{})
@@ -219,6 +230,67 @@ func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (
 
 // Plugin is the plugin under test.
 func (ws *WS) Plugin() *plugin.Plugin { return ws.p }
+
+// notifications are what a plugin tells ws unasked, which the stand-in
+// keeps for Notifications and Wait.
+var notifications = map[string]bool{
+	protocol.MethodCommandOutput: true,
+	protocol.MethodLog:           true,
+	protocol.MethodViewChanged:   true,
+	protocol.MethodViewBadge:     true,
+	protocol.MethodSyncState:     true,
+}
+
+// Answer has the stand-in answer a request the plugin sends ws (a
+// protocol.Method…) with fn, given the request's params. A request it
+// hasn't been told how to answer is answered CodeMethodNotFound, as a ws
+// from before that request would: the plugin's ErrUnsupported.
+func (ws *WS) Answer(method string, fn func(params json.RawMessage) (any, error)) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if ws.answers == nil {
+		ws.answers = map[string]func(json.RawMessage) (any, error){}
+	}
+	ws.answers[method] = fn
+}
+
+// Missions are the missions the stand-in has: what it answers p.Missions
+// (those not archived, unless asked for them too) and p.Mission with.
+func (ws *WS) Missions(missions ...protocol.MissionDetail) {
+	ws.Answer(protocol.MethodMissionList, func(params json.RawMessage) (any, error) {
+		var in protocol.MissionListParams
+		json.Unmarshal(params, &in) //nolint:errcheck // none is in play only
+		out := protocol.MissionListResult{Missions: []protocol.Mission{}}
+		for _, m := range missions {
+			if in.Archived || m.State != protocol.MissionArchived {
+				out.Missions = append(out.Missions, m.Mission)
+			}
+		}
+		return out, nil
+	})
+	ws.Answer(protocol.MethodMissionShow, func(params json.RawMessage) (any, error) {
+		var in protocol.MissionShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		for _, m := range missions {
+			if m.Slug == in.Slug {
+				return m, nil
+			}
+		}
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "there's no mission " + in.Slug}
+	})
+}
+
+// Repos are the repos the stand-in has: what it answers p.Repos with.
+func (ws *WS) Repos(repos ...protocol.Repo) {
+	ws.Answer(protocol.MethodRepoList, func(json.RawMessage) (any, error) {
+		if repos == nil {
+			repos = []protocol.Repo{}
+		}
+		return protocol.RepoListResult{Repos: repos}, nil
+	})
+}
 
 // Protocol is the version of the plugin protocol the handshake chose.
 func (ws *WS) Protocol() int { return ws.ver }

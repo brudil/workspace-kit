@@ -101,9 +101,10 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `agents.md` | What agents are told of the plugin. |
 | `p.Setup`, `p.OnConfig` | Declaring what depends on config, and hearing of a change. |
 | `p.Log`, `p.Changed`, `p.Badge` | A log, telling the open app that what it shows is stale, the count in the sidebar. |
-| `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. It's how a plugin reaches ws. |
+| `p.Missions`, `p.Mission`, `p.Repos` | Asking ws what it knows, in the protocol's types: the workspace's missions (where each stands, whose move it is, its capsules and pull requests), one with its brief and plan, and its repos with their capsules. `ErrNotFound` for a mission that isn't there, `ErrUnsupported` from a ws too old to answer. |
+| `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)` and `ws.Repos(…)` give the stand-in what it answers. |
 
 ## A plugin's folder
 

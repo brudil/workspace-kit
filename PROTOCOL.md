@@ -97,7 +97,7 @@ Always first, once.
 ```
 
 - `protocols` are the versions ws speaks, and `protocol` the newest of them. A ws from before versions were chosen sends only `protocol`, and speaks only that one. One that sends neither speaks 1.
-- `ws.executable` is ws's own program. A plugin reaches ws by running its commands, in the workspace's root: `<executable> show m12 -f llm`. ws's commands are its interface to a plugin as they are to anything else; there are no methods a plugin calls ws by yet.
+- `ws.executable` is ws's own program. A plugin asks ws what it knows with requests ([Asking ws](#asking-ws)). For what ws doesn't answer that way yet, a plugin can run its commands, in the workspace's root: `<executable> show m12 -f llm`.
 - `config` holds what's set, secrets included, by key. A key that isn't set is absent. Values are JSON: a string, a bool, a number, or an array of strings.
 - `view.listen` is a unix socket's path. A plugin that serves anything (its app's files, what its app asks it) listens there for HTTP before it answers. The file may be left from a run before: remove it first. It's usually `data/view.sock`, and somewhere shorter under the system's temporary folder when that path would be too long for a socket: listen wherever it says.
 - `view.base` is the path the plugin's HTTP is served under ([The view](#the-view)).
@@ -240,6 +240,80 @@ The count beside the view's sidebar entry (the view registered with that `path`)
 ```
 
 A sync finished. For `ws plugin list`.
+
+## Asking ws
+
+Requests from the plugin, each answered by ws in these types. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
+
+A plugin may ask once it has answered `initialize`.
+
+### `mission/list` (request)
+
+```json
+{ "archived": false }
+```
+
+The workspace's missions: those in play, and with `archived`, the archived ones after them.
+
+```json
+{
+  "missions": [
+    {
+      "slug": "token-cache",
+      "title": "Token cache",
+      "state": "review",
+      "created": "2026-11-17T09:12:00Z",
+      "updated": "2026-11-18T10:02:00Z",
+      "headline": { "court": "you", "text": "PR #12 waits on your review" },
+      "at": "Review",
+      "capsules": [
+        {
+          "repo": "api", "name": "token-cache", "branch": "token-cache",
+          "path": "/ws/repos/api/token-cache",
+          "pull_request": { "number": 12, "title": "Token cache", "url": "https://github.com/acme/api/pull/12", "state": "open" }
+        }
+      ],
+      "path": "/missions/token-cache"
+    }
+  ]
+}
+```
+
+- `state` is `briefing`, `draft`, `active`, `review`, `landed`, `parked`, `answered`, `handed-on`, `dropped` or `archived`.
+- `headline` is where it stands, and whose move it is: `court` is `agent` (crew or the orchestrator are on it), `you` (it waits on the person) or `outside` (on GitHub). An archived mission has none.
+- `at` is where it is on its route, in words.
+- A capsule's `path` is there while its folder is. `pull_request` is as ws last heard from GitHub, and `state` is `open`, `merged` or `closed`. `landed` is a capsule of a repo with no pull requests whose commits are on its default branch.
+- `path` is the mission's page in ws's web UI: what a plugin's app opens with `ws:open`.
+
+### `mission/show` (request)
+
+```json
+{ "slug": "token-cache" }
+```
+
+The mission, as in `mission/list`, with `brief` (markdown) and `plan` (markdown, absent when it has none). No such mission is `-32001`.
+
+### `repo/list` (request)
+
+No params. The workspace's repos, in ws's order:
+
+```json
+{
+  "repos": [
+    {
+      "name": "api", "title": "API", "group": "", "aliases": ["a"],
+      "cloned": true, "path": "/ws/repos/api",
+      "capsules": [
+        { "name": ".ground", "branch": "main", "path": "/ws/repos/api/.ground", "ground": true },
+        { "name": "token-cache", "branch": "token-cache", "path": "/ws/repos/api/token-cache", "mission": "token-cache" }
+      ]
+    }
+  ]
+}
+```
+
+- `title` is what ws calls it: its name, when ws.toml gives it no other.
+- A capsule's `mission` is the slug of the mission in play that works in it. `ground` is the repo's default branch, which work starts from.
 
 ## The view
 

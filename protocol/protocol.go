@@ -6,6 +6,7 @@ package protocol
 import (
 	"encoding/json"
 	"slices"
+	"time"
 )
 
 // Version is the newest version of the protocol this package speaks.
@@ -290,4 +291,143 @@ type SyncStateParams struct {
 	At     string `json:"at"`
 	TookMS int64  `json:"took_ms"`
 	Error  string `json:"error"`
+}
+
+// What a plugin asks ws: requests, each answered. Each is an addition to
+// version 1: a ws from before it answers CodeMethodNotFound.
+const (
+	MethodMissionList = "mission/list" // MissionListParams → MissionListResult
+	MethodMissionShow = "mission/show" // MissionShowParams → MissionDetail
+	MethodRepoList    = "repo/list"    // nothing → RepoListResult
+)
+
+// CodeNotFound is ws's answer for something asked for by name that it
+// hasn't: a mission with no such slug.
+const CodeNotFound = -32001
+
+// The states of a mission. One that's ended is landed, answered,
+// handed-on or dropped; one that's archived has ended, and is put away.
+const (
+	MissionBriefing = "briefing" // its brief isn't confirmed yet
+	MissionDraft    = "draft"    // confirmed, and nothing's been made
+	MissionActive   = "active"
+	MissionReview   = "review" // its pull requests are open
+	MissionLanded   = "landed"
+	MissionParked   = "parked"
+	MissionAnswered = "answered"
+	MissionHandedOn = "handed-on"
+	MissionDropped  = "dropped"
+	MissionArchived = "archived"
+)
+
+// Whose move a mission's headline says it is.
+const (
+	CourtAgent   = "agent"   // crew, a briefing agent or the orchestrator is on it
+	CourtYou     = "you"     // it waits on the person
+	CourtOutside = "outside" // it waits on GitHub: reviewers, checks, a merge
+)
+
+// MissionListParams says which missions: those in play, and with
+// Archived, those archived too.
+type MissionListParams struct {
+	Archived bool `json:"archived,omitempty"`
+}
+
+// MissionListResult is the workspace's missions, those in play first.
+type MissionListResult struct {
+	Missions []Mission `json:"missions"`
+}
+
+// MissionShowParams names a mission by its slug.
+type MissionShowParams struct {
+	Slug string `json:"slug"`
+}
+
+// Mission is a mission as a list shows it.
+type Mission struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	// State is one of the Mission states.
+	State   string    `json:"state"`
+	Created time.Time `json:"created"`
+	// Updated is when anything of it last changed.
+	Updated time.Time `json:"updated"`
+	// Headline is where it stands now, and whose move it is. Nil for an
+	// archived mission.
+	Headline *Headline `json:"headline,omitempty"`
+	// At is where it is on its route, in words.
+	At       string           `json:"at,omitempty"`
+	Capsules []MissionCapsule `json:"capsules"`
+	// Path is its page in ws's web UI: what a plugin's app opens with
+	// ws:open.
+	Path string `json:"path"`
+}
+
+// Headline is a mission's one line of where it stands.
+type Headline struct {
+	// Court is one of the Courts: whose move it is.
+	Court string `json:"court"`
+	Text  string `json:"text"`
+}
+
+// MissionCapsule is a capsule a mission works in: a repo's branch, in a
+// folder of its own while it exists, and its pull request once it has one.
+type MissionCapsule struct {
+	Repo   string `json:"repo"`
+	Name   string `json:"name"`
+	Branch string `json:"branch,omitempty"`
+	// Path is its folder, while it exists.
+	Path        string       `json:"path,omitempty"`
+	PullRequest *PullRequest `json:"pull_request,omitempty"`
+	// Landed: a capsule of a repo with no pull requests has landed its
+	// commits on the default branch.
+	Landed bool `json:"landed,omitempty"`
+}
+
+// PullRequest is a pull request on GitHub, as ws last heard of it.
+type PullRequest struct {
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+	URL    string `json:"url"`
+	// State is open, merged or closed.
+	State string `json:"state"`
+}
+
+// MissionDetail is a mission as its page shows it: as a list does, with
+// its brief and its plan.
+type MissionDetail struct {
+	Mission
+	Brief string `json:"brief"`
+	Plan  string `json:"plan,omitempty"`
+}
+
+// RepoListResult is the workspace's repos, in ws's order.
+type RepoListResult struct {
+	Repos []Repo `json:"repos"`
+}
+
+// Repo is one of the workspace's repos, and its capsules.
+type Repo struct {
+	Name string `json:"name"`
+	// Title is what ws calls it, where that isn't its name.
+	Title   string   `json:"title"`
+	Group   string   `json:"group,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	// Cloned: it's here, not only named in ws.toml.
+	Cloned bool `json:"cloned"`
+	// Path is its folder: its capsules are in it, and its default branch
+	// is checked out in Ground.
+	Path     string    `json:"path"`
+	Capsules []Capsule `json:"capsules"`
+}
+
+// Capsule is a repo's branch, checked out in a folder of its own.
+type Capsule struct {
+	Name   string `json:"name"`
+	Branch string `json:"branch,omitempty"`
+	Path   string `json:"path"`
+	// Ground: it's the repo's default branch, which work starts from.
+	Ground bool `json:"ground,omitempty"`
+	// Mission is the slug of the mission in play that works in it.
+	Mission string `json:"mission,omitempty"`
 }
