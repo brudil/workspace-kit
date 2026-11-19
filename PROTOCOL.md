@@ -298,13 +298,15 @@ Someone ran `ws jira mine --all -f llm`.
   "id": "c7",
   "args": ["mine", "--all", "-f", "llm"],
   "dir": "/ws/repos/api/token-cache",
-  "terminal": { "tty": true, "width": 120, "color": true }
+  "terminal": { "tty": true, "width": 120, "color": true },
+  "input": "terminal"
 }
 ```
 
 - `id` is ws's name for this run. Its output carries it.
 - `args` is everything after the command's name, untouched.
 - `dir` is where it was run from.
+- `input` is what's on the command's standard input: `piped` (a pipe or a file, `ws jira … < notes.md`) or `terminal` (the person, typing). The command reads it with [`command/read`](#commandread-request). Added within version 1: a ws from before it says nothing, and the command has nothing to read. The plugin's own stdin is the connection, never the command's.
 
 While it runs, the plugin sends `command/output`. Its answer ends the command:
 
@@ -494,6 +496,25 @@ A sync finished. For `ws plugin list`.
 Requests from the plugin, each answered by ws in these types: what ws knows, and, last, one thing ws does for the person. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
 
 A plugin may ask once it has answered `initialize`.
+
+### `command/read` (request)
+
+A running command reading its standard input, which ws reads only when it's asked: a command that never reads it never waits on it. Added within version 1, and answered for a `command/run` that said its `input`.
+
+```json
+{ "id": "c7", "max": 65536 }
+```
+
+- `id` is the `command/run`'s.
+- `max` is the most to give. ws gives at most 65536 (`protocol.ReadAtOnce`) at once, whatever's asked.
+
+The answer is what was read, as base64, so it's whatever was piped, cut wherever:
+
+```json
+{ "data": "eyJvcHMiOiBbXX0K" }
+```
+
+At least one byte, or, once there's no more, `{ "eof": true }`. A command that's ended, or that has no input, is `-32001`. Output the command sent before it asks is shown before ws reads, so it can prompt.
 
 ### `mission/list` (request)
 

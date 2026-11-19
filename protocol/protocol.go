@@ -651,7 +651,18 @@ type CommandRunParams struct {
 	Args     []string `json:"args"`
 	Dir      string   `json:"dir"`
 	Terminal Terminal `json:"terminal"`
+	// Input is what's on the command's standard input: InputPiped or
+	// InputTerminal, read with command/read. An addition to version 1: a
+	// ws from before it says nothing, and gives the command nothing to
+	// read.
+	Input string `json:"input,omitempty"`
 }
+
+// What's on a command's standard input.
+const (
+	InputPiped    = "piped"    // a pipe or a file: ws … < ops.json
+	InputTerminal = "terminal" // the person, typing
+)
 
 // Terminal is what a command's output is going to.
 type Terminal struct {
@@ -663,6 +674,31 @@ type Terminal struct {
 // CommandRunResult ends a command.
 type CommandRunResult struct {
 	Exit int `json:"exit"`
+}
+
+// MethodCommandRead is a running command reading its standard input:
+// CommandReadParams → CommandReadResult. A request from the plugin, and
+// an addition to version 1: a ws that sends a command/run its Input
+// answers it.
+const MethodCommandRead = "command/read"
+
+// ReadAtOnce is the most one command/read gives: it gives what's there,
+// up to Max or this, whichever is less.
+const ReadAtOnce = 64 << 10
+
+// CommandReadParams asks for what's next on a command's standard input.
+// ID is the command/run's.
+type CommandReadParams struct {
+	ID  string `json:"id"`
+	Max int    `json:"max"`
+}
+
+// CommandReadResult is what was read: some bytes, at least one unless
+// EOF, which says there's no more. Data is base64 in JSON, so it's
+// whatever was piped, cut wherever.
+type CommandReadResult struct {
+	Data []byte `json:"data,omitempty"`
+	EOF  bool   `json:"eof,omitempty"`
 }
 
 // The streams of a command's output.

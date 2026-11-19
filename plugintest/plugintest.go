@@ -57,7 +57,8 @@ type WS struct {
 	seq     int
 	notes   []note
 	answers map[string]func(json.RawMessage) (any, error)
-	arrive  chan struct{} // closed and remade whenever a notification comes
+	inputs  map[string]io.Reader // what's piped to a running command, by its id
+	arrive  chan struct{}        // closed and remade whenever a notification comes
 	closed  bool
 	started chan struct{}             // closed once the plugin's registered
 	things  map[string]protocol.Thing // what it's told ws of its things, by kind and name
@@ -241,6 +242,8 @@ func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (
 	switch method {
 	case protocol.MethodThingPut, protocol.MethodThingRemove, protocol.MethodThingList:
 		return ws.keepThings(method, params)
+	case protocol.MethodCommandRead:
+		return ws.read(params)
 	}
 	if !notifications[method] {
 		// A request it wasn't told how to answer: as a ws from before it.
@@ -252,6 +255,33 @@ func (ws *WS) handle(_ context.Context, method string, params json.RawMessage) (
 	ws.arrive = make(chan struct{})
 	ws.mu.Unlock()
 	return nil, nil
+}
+
+// read answers a command reading its standard input, as ws does: what's
+// next of what was piped to it.
+func (ws *WS) read(params json.RawMessage) (any, error) {
+	var in protocol.CommandReadParams
+	if err := json.Unmarshal(params, &in); err != nil {
+		return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+	}
+	ws.mu.Lock()
+	r := ws.inputs[in.ID]
+	ws.mu.Unlock()
+	if r == nil {
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "no command " + in.ID + " with input to read"}
+	}
+	if in.Max <= 0 || in.Max > protocol.ReadAtOnce {
+		in.Max = protocol.ReadAtOnce
+	}
+	b := make([]byte, in.Max)
+	n, err := r.Read(b)
+	if n == 0 && err == io.EOF {
+		return protocol.CommandReadResult{EOF: true}, nil
+	}
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return protocol.CommandReadResult{Data: b[:n]}, nil
 }
 
 // Plugin is the plugin under test.
@@ -588,16 +618,41 @@ func (ws *WS) Run(args ...string) Result {
 // What the command printed before it was stopped is returned, with an
 // exit code of -1.
 func (ws *WS) RunContext(ctx context.Context, args ...string) Result {
+	return ws.run(ctx, nil, args)
+}
+
+// Pipe runs the plugin's command with input piped to it, as
+// "ws <plugin> args... < file" would: Call.Stdin reads input, and
+// Call.Piped is true. Run gives a command nothing to read.
+func (ws *WS) Pipe(input string, args ...string) Result {
+	return ws.run(context.Background(), strings.NewReader(input), args)
+}
+
+func (ws *WS) run(ctx context.Context, input io.Reader, args []string) Result {
 	ws.mu.Lock()
 	ws.seq++
 	id := fmt.Sprintf("c%d", ws.seq)
+	if input != nil {
+		if ws.inputs == nil {
+			ws.inputs = map[string]io.Reader{}
+		}
+		ws.inputs[id] = input
+	}
 	ws.mu.Unlock()
+	defer func() {
+		ws.mu.Lock()
+		delete(ws.inputs, id)
+		ws.mu.Unlock()
+	}()
 	if args == nil {
 		args = []string{}
 	}
+	run := protocol.CommandRunParams{ID: id, Args: args, Dir: ws.dir, Terminal: ws.Terminal}
+	if input != nil {
+		run.Input = protocol.InputPiped
+	}
 	var out protocol.CommandRunResult
-	err := ws.conn.Call(ctx, protocol.MethodCommandRun,
-		protocol.CommandRunParams{ID: id, Args: args, Dir: ws.dir, Terminal: ws.Terminal}, &out)
+	err := ws.conn.Call(ctx, protocol.MethodCommandRun, run, &out)
 	res := Result{Exit: out.Exit}
 	if err != nil {
 		res.Exit, res.Stderr = -1, err.Error()+"\n"
