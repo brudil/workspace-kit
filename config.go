@@ -35,6 +35,8 @@ type key struct {
 	// inSetup is whether a Setup read it: a change to it restarts the
 	// plugin.
 	inSetup bool
+	// table is the key's rows' fields, when it's a table.
+	table *TableKey
 }
 
 // Option says more about a config key.
@@ -121,6 +123,12 @@ func (c *Config) Number(key, title string, opts ...Option) *NumberKey {
 	return &NumberKey{c.declare(key, title, protocol.TypeNumber, opts)}
 }
 
+// Map declares a key holding text by text: a name for each of some
+// things, as `columns = { "In Review" = "Review" }`.
+func (c *Config) Map(key, title string, opts ...Option) *MapKey {
+	return &MapKey{c.declare(key, title, protocol.TypeMap, opts)}
+}
+
 // raw is the key's value as ws gave it, and whether it's set. A read in
 // a Setup is noted.
 func (k *key) raw() (json.RawMessage, bool) {
@@ -142,63 +150,50 @@ func (k *key) IsSet() bool {
 	return ok
 }
 
-// blank is whether a value is as good as not set: null, "" or [].
+// blank is whether a value is as good as not set: null, "", [] or {}.
 func blank(v json.RawMessage) bool {
 	v = bytes.TrimSpace(v)
-	return len(v) == 0 || bytes.Equal(v, []byte("null")) || bytes.Equal(v, []byte(`""`)) || bytes.Equal(v, []byte("[]"))
+	return len(v) == 0 || bytes.Equal(v, []byte("null")) || bytes.Equal(v, []byte(`""`)) || bytes.Equal(v, []byte("[]")) || bytes.Equal(v, []byte("{}"))
 }
 
-// StringKey reads a key holding text: a string, URL, secret or enum.
-type StringKey struct{ *key }
+// What a value is, given what's set (v, if ok) and the default its key
+// was declared with: a key's and a row's field's are read the same way.
 
-// Get is the key's value: what's set, else its default, else "".
-func (k *StringKey) Get() string {
-	if v, ok := k.raw(); ok {
+func textOf(v json.RawMessage, ok bool, def any) string {
+	if ok {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
 			return s
 		}
 	}
-	s, _ := k.spec.Default.(string)
+	s, _ := def.(string)
 	return s
 }
 
-// ListKey reads a key holding a list of strings.
-type ListKey struct{ *key }
-
-// Get is the key's value: what's set, else its default, else none.
-func (k *ListKey) Get() []string {
-	if v, ok := k.raw(); ok {
+func listOf(v json.RawMessage, ok bool, def any) []string {
+	if ok {
 		var l []string
 		if json.Unmarshal(v, &l) == nil {
 			return l
 		}
 	}
-	l, _ := k.spec.Default.([]string)
+	l, _ := def.([]string)
 	return l
 }
 
-// BoolKey reads a key that's on or off.
-type BoolKey struct{ *key }
-
-// Get is the key's value: what's set, else its default, else false.
-func (k *BoolKey) Get() bool {
-	if v, ok := k.raw(); ok {
+func boolOf(v json.RawMessage, ok bool, def any) bool {
+	if ok {
 		var b bool
 		if json.Unmarshal(v, &b) == nil {
 			return b
 		}
 	}
-	b, _ := k.spec.Default.(bool)
+	b, _ := def.(bool)
 	return b
 }
 
-// NumberKey reads a key holding a number.
-type NumberKey struct{ *key }
-
-// Get is the key's value: what's set, else its default, else 0.
-func (k *NumberKey) Get() float64 {
-	if v, ok := k.raw(); ok {
+func numberOf(v json.RawMessage, ok bool, def any) float64 {
+	if ok {
 		var n float64
 		if json.Unmarshal(v, &n) == nil {
 			return n
@@ -211,7 +206,7 @@ func (k *NumberKey) Get() float64 {
 			}
 		}
 	}
-	switch d := k.spec.Default.(type) {
+	switch d := def.(type) {
 	case float64:
 		return d
 	case int:
@@ -220,13 +215,74 @@ func (k *NumberKey) Get() float64 {
 	return 0
 }
 
+func mapOf(v json.RawMessage, ok bool, def any) map[string]string {
+	if ok {
+		var m map[string]string
+		if json.Unmarshal(v, &m) == nil {
+			return m
+		}
+	}
+	m, _ := def.(map[string]string)
+	return m
+}
+
+// StringKey reads a key holding text: a string, URL, secret or enum.
+type StringKey struct{ *key }
+
+// Get is the key's value: what's set, else its default, else "".
+func (k *StringKey) Get() string {
+	v, ok := k.raw()
+	return textOf(v, ok, k.spec.Default)
+}
+
+// ListKey reads a key holding a list of strings.
+type ListKey struct{ *key }
+
+// Get is the key's value: what's set, else its default, else none.
+func (k *ListKey) Get() []string {
+	v, ok := k.raw()
+	return listOf(v, ok, k.spec.Default)
+}
+
+// BoolKey reads a key that's on or off.
+type BoolKey struct{ *key }
+
+// Get is the key's value: what's set, else its default, else false.
+func (k *BoolKey) Get() bool {
+	v, ok := k.raw()
+	return boolOf(v, ok, k.spec.Default)
+}
+
+// NumberKey reads a key holding a number.
+type NumberKey struct{ *key }
+
+// Get is the key's value: what's set, else its default, else 0.
+func (k *NumberKey) Get() float64 {
+	v, ok := k.raw()
+	return numberOf(v, ok, k.spec.Default)
+}
+
+// MapKey reads a key holding text by text: a name for each of some
+// things.
+type MapKey struct{ *key }
+
+// Get is the key's value: what's set, else its default, else none.
+func (k *MapKey) Get() map[string]string {
+	v, ok := k.raw()
+	return mapOf(v, ok, k.spec.Default)
+}
+
 // spec is the keys as ws is told them.
 func (c *Config) spec() []protocol.ConfigKey {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]protocol.ConfigKey, 0, len(c.keys))
 	for _, k := range c.keys {
-		out = append(out, k.spec)
+		s := k.spec
+		if k.table != nil {
+			s.Fields = k.table.fieldSpecs()
+		}
+		out = append(out, s)
 	}
 	if len(out) == 0 {
 		return nil

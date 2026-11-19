@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -82,6 +83,23 @@ type options struct {
 
 // Config is the config the plugin starts with, by key.
 func Config(values map[string]any) Option { return func(o *options) { o.config = values } }
+
+// Row is one row of a config table, for Config and SetConfig: a table's
+// value is its rows, in order.
+//
+//	plugintest.Config(map[string]any{"queries": []protocol.ConfigRow{
+//		plugintest.Row("bugs", map[string]any{"label": "Bugs"}),
+//	}})
+//
+// A field that's a table is rows in turn. (A table given as a map of
+// maps, as the file has it, is read too: its rows are then by name.)
+func Row(name string, values map[string]any) protocol.ConfigRow {
+	out, err := encode(values)
+	if err != nil {
+		panic("plugintest: row " + name + ": " + err.Error())
+	}
+	return protocol.ConfigRow{Name: name, Values: out}
+}
 
 // Dir is the folder the plugin runs in: its data folder is dir/data. It's
 // kept when the plugin stops, so a second plugin started in it finds what
@@ -292,6 +310,59 @@ func (ws *WS) Missions(missions ...protocol.MissionDetail) {
 		}
 		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "there's no mission " + in.Slug}
 	})
+}
+
+// Shows are what the stand-in shows: what it answers p.Show and p.ShowIn
+// with, each found by its Ref and Mission. Anything else is ErrNotFound.
+func (ws *WS) Shows(shown ...protocol.Shown) {
+	ws.Answer(protocol.MethodShow, func(params json.RawMessage) (any, error) {
+		var in protocol.ShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		for _, s := range shown {
+			if s.Ref == in.Ref && s.Mission == in.Mission {
+				if s.Body == nil {
+					s.Body = []string{}
+				}
+				if s.Links == nil {
+					s.Links = []protocol.ShownLink{}
+				}
+				if s.Said == nil {
+					s.Said = []protocol.Said{}
+				}
+				return s, nil
+			}
+		}
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has nothing called " + in.Ref}
+	})
+}
+
+// Conversations has the stand-in start the conversations the plugin
+// asks for (p.StartConversation), w1 then w2 and so on, and returns what
+// each was started with, in turn.
+func (ws *WS) Conversations() func() []string {
+	var mu sync.Mutex
+	var started []string
+	ws.Answer(protocol.MethodConversationStart, func(params json.RawMessage) (any, error) {
+		var in protocol.ConversationStartParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		if strings.TrimSpace(in.Message) == "" {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: "say something"}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		started = append(started, in.Message)
+		id := "w" + strconv.Itoa(len(started))
+		return protocol.ConversationStarted{ID: id, Path: "/conversations/" + id}, nil
+	})
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), started...)
+	}
 }
 
 // Repos are the repos the stand-in has: what it answers p.Repos with.

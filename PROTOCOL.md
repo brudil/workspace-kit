@@ -176,7 +176,8 @@ Every field is optional.
   - Both are paths in the plugin's own HTTP. Each starts with `/` (not `//`) and has no `..`. A query is kept as it's given, so a plugin can name what it built (`?v=<a hash of the file>`) and a browser asks again when it's built again.
 - `commands.name` is the word after `ws`. It defaults to the plugin's name.
 - `agent.roles` empty means every role.
-- `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
+- `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`, `map` and `table`. `scope` is `shared` (the default) or `local`; a secret is always local.
+- A `map` is text by text (`columns = { "In Review" = "Review" }`). A `table` is named rows, each holding the key's `fields`: [Config in tables](#config-in-tables).
 - `syncs` is for show (`ws plugin list`); ws doesn't run them. `every` is seconds between runs, `0` for a sync with no interval of its own. `open`, where it's there, is seconds between runs while the plugin's app is on screen ([`view/looking`](#viewlooking-notification)).
 - `refs` are how the plugin's things are named: [Refs](#refs).
 - `actions` are what the plugin can do when it's asked from Find, among what there is to do there: each an `id` (lower-case letters, digits and hyphens), a `title`, and an `icon` and a `hint` if it has them. ws runs one with [`action/run`](#actionrun-request). What can be done to one of its things is the thing's kind's (`refs[].actions`).
@@ -244,6 +245,48 @@ What ws does with them:
 ```
 
 The whole config, as in `initialize`.
+
+### Config in tables
+
+A key of type `table` holds named rows, each with the same fields: the queries a board shows, the projects it knows. It's declared with its fields, which are keys themselves (a type, `required`, a `default`, `help`, `example`), and with `row`, what a row's name is called for whoever's asked for one:
+
+```json
+{ "key": "spaces", "title": "Spaces", "type": "table", "row": "Space key",
+  "fields": [
+    { "key": "label", "title": "Label", "type": "string" },
+    { "key": "columns", "title": "Columns", "type": "map" },
+    { "key": "custom_fields", "title": "Custom fields", "type": "table", "row": "Field",
+      "fields": [ { "key": "card", "title": "On cards", "type": "bool" } ] }
+  ] }
+```
+
+A field is of any type but `secret`. One may be a `table` itself, and its fields may not be: a table goes one level down. Both were added within version 1.
+
+In ws.toml a row is a table under the key, named by the row:
+
+```toml
+[plugin.jira.spaces.ram]
+label = "Risk Modelling"
+columns = { "Ready for Development" = "To Do" }
+
+[plugin.jira.spaces.ram.custom_fields.Team]
+card = true
+```
+
+ws checks each row against the fields: a field that isn't declared, a value of the wrong type and a required field left out are each said, with the row and the field. A field that's wrong is left out, and a row without a field it needs isn't given to the plugin. It lays yours (ws.local.toml) over the team's row by row, then field by field, and leaves out a row that says `enabled = false`, which is how a team's row is taken away in your own file.
+
+The table's value, in `config`, is its rows in the order they were written, the team's first:
+
+```json
+{ "spaces": [
+    { "name": "ram", "values": {
+        "label": "Risk Modelling",
+        "columns": { "Ready for Development": "To Do" },
+        "custom_fields": [ { "name": "Team", "values": { "card": true } } ] } }
+] }
+```
+
+A ws from before tables doesn't know the type: it gives the value as the file has it, an object of objects by row name, with no order and nothing checked, and its commands can't set it. The framework reads both, the second with its rows by name.
 
 ### `command/run` (request)
 
@@ -394,7 +437,7 @@ A sync finished. For `ws plugin list`.
 
 ## Asking ws
 
-Requests from the plugin, each answered by ws in these types. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
+Requests from the plugin, each answered by ws in these types: what ws knows, and, last, one thing ws does for the person. Each was added within version 1, so a ws from before it answers `-32601`: the framework's `ErrUnsupported`, which says to update ws. Something asked for by name that ws hasn't is `-32001` (`ErrNotFound`).
 
 A plugin may ask once it has answered `initialize`.
 
@@ -467,6 +510,66 @@ No params. The workspace's repos, in ws's order:
 
 - `title` is what ws calls it: its name, when ws.toml gives it no other.
 - A capsule's `mission` is the slug of the mission in play that works in it. `ground` is the repo's default branch, which work starts from.
+
+### `show` (request)
+
+```json
+{ "ref": "RAM-123" }
+```
+
+One of the workspace's things as `ws show` shows it: what it is, what it links to, and what points at it from elsewhere in the workspace. It's how a plugin finds what's said of one of its things (the missions about it, the conversations that name it), and goes from there to any of them.
+
+`ref` names it as `ws show` does: one of a plugin's things (`RAM-123`), a pull request (`api#12`), a document (`records:docs/plan.md`), one of the workspace's conversations, pages or artifacts (`w4`, `p2`, `a3`). One of a mission's own (`t3`, `d1`, `s2`, `c1`, `r1.c2`) is asked for with its mission. A mission itself is its slug, as `ref` or as `mission` with no `ref`. `full` is everything a view would otherwise cut short.
+
+```json
+{
+  "ref": "RAM-123",
+  "head": "Jira issue RAM-123: Token refresh is flaky (In Progress)",
+  "body": ["Assignee: Sam", "At: https://example.atlassian.net/browse/RAM-123"],
+  "links": [{ "ref": "RAM-100", "what": "Parent" }],
+  "said": [
+    {
+      "ref": "token-cache", "kind": "mission", "title": "Token cache",
+      "state": "active", "standing": true, "how": "about",
+      "at": "2026-11-17T09:12:00Z", "path": "/missions/token-cache"
+    },
+    {
+      "ref": "t3", "mission": "token-cache", "kind": "thread-ask", "title": "Which clock?",
+      "state": "resolved", "standing": false, "how": "mentions",
+      "at": "2026-11-18T10:02:00Z", "path": "/missions/token-cache/conversations/t3"
+    }
+  ],
+  "path": "/x/jira/issue/RAM-123"
+}
+```
+
+- `head` is what it is, in a line, and `body` the essentials of it, as `ws show` prints them: plain text, a line or a paragraph each. One of the plugin's own things is as the plugin last told ws.
+- `links` are what it links to. Each is asked for in turn with its `ref`, and the `mission` this was asked with.
+- `said` is what points at it, what still stands first, then latest first. `ref` is its ref where it's read: in `mission`, or under `pull_request` (`api#12`), or, with neither, the workspace's. A mission's own `ref` is its slug. Each is asked for in turn with its `ref` and `mission` as they are, and one under a pull request by the pull request.
+- `kind` is what it is: `mission`, `brief`, `handoff`, `file`, `decision`, `comment`, `review`, `talk`, `thread-ask`, `thread-change`, `thread-note`, `thing`, `pull-request`, `page`, `artifact`, `document`, and whatever ws adds. `state` is where it stands in its kind's words, and `standing` whether that's still in play.
+- `how` is how it points: `about`, `on`, `by`, `for`, `of`, `in`, `from`, `mentions`, `lands`, and whatever ws adds. `lines` is where in a file, as they were when it was said, and `at` when it was said, absent where ws hasn't when.
+- `path` is its page in ws's web UI, where it has one: what a plugin's app opens with `ws:open`.
+- ws says what it has linked: a mission that's about it, and whatever names it where words are kept (a conversation's turn, a mission's brief, a handoff, a decision, a document).
+
+Nothing by that name is `-32001`.
+
+### `conversation/start` (request)
+
+```json
+{ "message": "Let's work out a mission for RAM-123." }
+```
+
+Starts one of the workspace's conversations for the person using the plugin, with `message` as what they say first, and has its agent answer. It's how a plugin's app hands something on to ws to be talked over: the agent reads what the message names (`RAM-123`) with `ws show`, and proposes what the conversation comes to (a mission, a decision), for the person to accept there.
+
+```json
+{ "id": "w4", "path": "/conversations/w4" }
+```
+
+- `id` is the conversation, as `show` names it, and `path` its page in ws's web UI: what the plugin's app opens with `ws:open`.
+- What the message names as ws names things is linked: `show` of the thing says the conversation mentions it.
+- The message is sent as the person, and an agent answers it, so this is for something they asked for (a button they pressed), not for the plugin's own account. ws records which plugin started the conversation, and says so on it.
+
+An empty `message` is `-32602`.
 
 ## Telling ws of things
 
