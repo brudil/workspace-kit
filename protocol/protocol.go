@@ -568,6 +568,13 @@ const (
 	TypeEnum   = "enum"
 	TypeList   = "list"
 	TypeSecret = "secret"
+	// TypeTable is named rows, each holding the key's Fields. Its value
+	// is its rows, in the order they were written ([]ConfigRow). A ws from
+	// before tables gives it as the file has it, an object of objects by
+	// row name, which has no order.
+	TypeTable = "table"
+	// TypeMap is text to text: an object of strings.
+	TypeMap = "map"
 )
 
 // Where a config key's value is kept.
@@ -587,6 +594,19 @@ type ConfigKey struct {
 	Example  string   `json:"example,omitempty"`
 	Options  []string `json:"options,omitempty"`
 	Scope    string   `json:"scope,omitempty"`
+	// Fields are what each row of a table holds: keys of any type but a
+	// secret. One may be a table itself, whose own fields may not be.
+	// Row is what a row's name is called, in words ("Query", "Space
+	// key"), for whoever's asked for one.
+	Fields []ConfigKey `json:"fields,omitempty"`
+	Row    string      `json:"row,omitempty"`
+}
+
+// ConfigRow is one row of a table as ws sends it: its name, and its
+// fields' values. A field that's a table is rows in turn.
+type ConfigRow struct {
+	Name   string                     `json:"name"`
+	Values map[string]json.RawMessage `json:"values"`
 }
 
 // Secret says whether the key's value is a secret: kept apart from

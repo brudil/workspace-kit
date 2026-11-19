@@ -84,6 +84,23 @@ type options struct {
 // Config is the config the plugin starts with, by key.
 func Config(values map[string]any) Option { return func(o *options) { o.config = values } }
 
+// Row is one row of a config table, for Config and SetConfig: a table's
+// value is its rows, in order.
+//
+//	plugintest.Config(map[string]any{"queries": []protocol.ConfigRow{
+//		plugintest.Row("bugs", map[string]any{"label": "Bugs"}),
+//	}})
+//
+// A field that's a table is rows in turn. (A table given as a map of
+// maps, as the file has it, is read too: its rows are then by name.)
+func Row(name string, values map[string]any) protocol.ConfigRow {
+	out, err := encode(values)
+	if err != nil {
+		panic("plugintest: row " + name + ": " + err.Error())
+	}
+	return protocol.ConfigRow{Name: name, Values: out}
+}
+
 // Dir is the folder the plugin runs in: its data folder is dir/data. It's
 // kept when the plugin stops, so a second plugin started in it finds what
 // the first left. The default is a temporary folder of the plugin's own.

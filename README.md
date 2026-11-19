@@ -94,7 +94,8 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 
 | | |
 |---|---|
-| `p.Config.String`, `URL`, `Secret`, `List`, `Bool`, `Number`, `Enum` | A config key: in ws's Settings, asked for on install, read with `.Get()`. A change reaches `.Get()` at once. |
+| `p.Config.String`, `URL`, `Secret`, `List`, `Bool`, `Number`, `Enum`, `Map` | A config key: in ws's Settings, asked for on install, read with `.Get()`. A change reaches `.Get()` at once. |
+| `p.Config.Table` | A config key holding named rows (`[plugin.jira.queries.bugs]`), each with the fields declared with the table's own `String`, `Bool`, `Map`… and read with what each returned: `for _, row := range queries.Rows() { label.In(row) }`. Rows come in the order they were written, the team's with yours laid over them, each checked by ws against the fields. A field may be a table itself (`Table`, read with `RowsIn(row)`), one level down. |
 | `p.UI` | The plugin's app: a folder of its built files, with `app.js` and, if it has one, `app.css`. It's served at `/ui/`, and registered with a hash of each file, so a browser asks again when it's built again. |
 | `p.View`, with `plugin.Icon`, `Under`, `At` | An entry in ws's sidebar, which opens the app at a path. |
 | `p.Handle`, `p.HandleFunc` | What the app asks the plugin, as `net/http` takes it: `"GET /api/issues/{key}"`. A path nothing handles is a plain 404. |
@@ -118,7 +119,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `.Show` | One thing, as it is now: for one ws wasn't told of, and for `ws show RAM-123`. `ErrNotFound` for a name the plugin has nothing by. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Conversations()` has it start the conversations asked for and says what each was started with, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `plugintest.Row(…)` is a row of a config table, `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Conversations()` has it start the conversations asked for and says what each was started with, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
 
 ## A plugin's folder
 

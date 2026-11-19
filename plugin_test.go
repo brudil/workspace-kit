@@ -283,6 +283,202 @@ func TestConfigIsReadThroughItsKeys(t *testing.T) {
 	}
 }
 
+// A table is declared with its rows' fields, registered with them, and
+// read a row at a time through what declared each: in the order ws gives
+// the rows, each field with its default, a table within a row in turn.
+func TestConfigTablesAreReadARowAtATime(t *testing.T) {
+	var (
+		queries, spaces, fields *plugin.TableKey
+		label, jql, name, field *plugin.StringField
+		pinned, card            *plugin.BoolField
+		limit                   *plugin.NumberField
+		tags                    *plugin.ListField
+		columns                 *plugin.MapField
+		kind                    *plugin.StringField
+		statuses                *plugin.MapKey
+	)
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		queries = p.Config.Table("queries", "Queries", plugin.RowName("Query"), plugin.Required)
+		label = queries.String("label", "Label")
+		jql = queries.String("query", "JQL", plugin.Required, plugin.Help("What finds its issues"))
+		pinned = queries.Bool("pinned", "Pinned", plugin.Default(true))
+		limit = queries.Number("limit", "Limit", plugin.Default(50))
+		tags = queries.List("tags", "Tags")
+		kind = queries.Enum("kind", "Kind", []string{"board", "list"}, plugin.Default("board"))
+		spaces = p.Config.Table("spaces", "Spaces", plugin.RowName("Space key"))
+		name = spaces.String("label", "Label")
+		columns = spaces.Map("columns", "Columns")
+		fields = spaces.Table("custom_fields", "Custom fields", plugin.RowName("Field"))
+		field = fields.String("field", "Its id")
+		card = fields.Bool("card", "On cards")
+		statuses = p.Config.Map("statuses", "Statuses", plugin.Default(map[string]string{"Done": "Closed"}))
+	}, plugintest.Config(map[string]any{
+		"queries": []protocol.ConfigRow{
+			plugintest.Row("initiatives", map[string]any{"label": "Initiatives", "query": "project = RAP", "pinned": false, "tags": []string{"a", "b"}}),
+			plugintest.Row("bugs", map[string]any{"query": "project = RAM, type = Bug", "limit": 5, "kind": "list"}),
+		},
+		"spaces": []protocol.ConfigRow{
+			plugintest.Row("ram", map[string]any{"label": "Risk Modelling", "columns": map[string]string{"Ready for Development": "To Do"},
+				"custom_fields": []protocol.ConfigRow{
+					plugintest.Row("Team", map[string]any{"card": true}),
+					plugintest.Row("Story Points", map[string]any{"field": "customfield_10016"}),
+				}}),
+			plugintest.Row("rap", map[string]any{"label": "Risk Platform"}),
+		},
+	}))
+
+	// What ws is told: each table with its rows' fields, and what a row's
+	// name is called.
+	reg := ws.Registration().Config
+	if len(reg) != 3 || reg[0].Type != protocol.TypeTable || reg[0].Row != "Query" || !reg[0].Required || len(reg[0].Fields) != 6 {
+		t.Fatalf("registered: %+v", reg)
+	}
+	if f := reg[0].Fields[1]; f.Key != "query" || f.Type != protocol.TypeString || !f.Required || f.Help != "What finds its issues" {
+		t.Errorf("a field: %+v", f)
+	}
+	if f := reg[0].Fields[5]; f.Type != protocol.TypeEnum || len(f.Options) != 2 || f.Default != "board" {
+		t.Errorf("an enum field: %+v", f)
+	}
+	if f := reg[1].Fields[2]; f.Key != "custom_fields" || f.Type != protocol.TypeTable || f.Row != "Field" || len(f.Fields) != 2 || f.Fields[1].Type != protocol.TypeBool {
+		t.Errorf("a table in a table: %+v", f)
+	}
+	if reg[1].Fields[1].Type != protocol.TypeMap || reg[2].Type != protocol.TypeMap {
+		t.Errorf("maps: %+v, %+v", reg[1].Fields[1], reg[2])
+	}
+
+	// Rows in the order ws gave them, each field what's set or its
+	// default.
+	rows := queries.Rows()
+	if len(rows) != 2 || rows[0].Name != "initiatives" || rows[1].Name != "bugs" || !queries.IsSet() {
+		t.Fatalf("queries: %+v", rows)
+	}
+	if label.In(rows[0]) != "Initiatives" || jql.In(rows[0]) != "project = RAP" || pinned.In(rows[0]) || limit.In(rows[0]) != 50 || len(tags.In(rows[0])) != 2 || kind.In(rows[0]) != "board" {
+		t.Errorf("the first query: %q %q %v %v %v %q", label.In(rows[0]), jql.In(rows[0]), pinned.In(rows[0]), limit.In(rows[0]), tags.In(rows[0]), kind.In(rows[0]))
+	}
+	if label.In(rows[1]) != "" || label.IsSetIn(rows[1]) || jql.In(rows[1]) != "project = RAM, type = Bug" || !pinned.In(rows[1]) || limit.In(rows[1]) != 5 || tags.In(rows[1]) != nil || kind.In(rows[1]) != "list" {
+		t.Errorf("the second query: %q %q %v %v %v %q", label.In(rows[1]), jql.In(rows[1]), pinned.In(rows[1]), limit.In(rows[1]), tags.In(rows[1]), kind.In(rows[1]))
+	}
+
+	// A map, and rows within a row.
+	ram := spaces.Rows()[0]
+	if name.In(ram) != "Risk Modelling" || columns.In(ram)["Ready for Development"] != "To Do" {
+		t.Errorf("a space: %q %v", name.In(ram), columns.In(ram))
+	}
+	inner := fields.RowsIn(ram)
+	if len(inner) != 2 || inner[0].Name != "Team" || !card.In(inner[0]) || field.In(inner[0]) != "" || inner[1].Name != "Story Points" || field.In(inner[1]) != "customfield_10016" || card.In(inner[1]) {
+		t.Errorf("a space's custom fields: %+v", inner)
+	}
+	if got := fields.RowsIn(spaces.Rows()[1]); len(got) != 0 || columns.In(spaces.Rows()[1]) != nil {
+		t.Errorf("a space with none: %+v", got)
+	}
+	if fields.Rows() != nil {
+		t.Error("a table that's a row's field has rows of its own")
+	}
+	if got := statuses.Get(); got["Done"] != "Closed" || statuses.IsSet() {
+		t.Errorf("a map, not set: %v", got)
+	}
+
+	// A field read in another table's row is a mistake: it's as not set,
+	// and the plugin's log says so.
+	if label.In(ram) != "" || card.In(rows[0]) || len(fields.RowsIn(rows[0])) != 0 {
+		t.Error("a field read in another table's row has a value")
+	}
+	said := false
+	for _, l := range ws.Logs() {
+		said = said || strings.Contains(l.Message, "label is a field of queries, and was read in a row of spaces")
+	}
+	if !said {
+		t.Errorf("nothing logged of a field read in the wrong row: %+v", ws.Logs())
+	}
+
+	// From a ws that passes the file through as it is, a table is an
+	// object by row name: its rows are then by name. And a change is
+	// read at once.
+	if err := ws.SetConfig(map[string]any{
+		"queries":  map[string]any{"zed": map[string]any{"query": "z"}, "alpha": map[string]any{"query": "a", "label": "Alpha"}},
+		"spaces":   map[string]any{"ram": map[string]any{"custom_fields": map[string]any{"Team": map[string]any{"card": true}}}},
+		"statuses": map[string]string{"Open": "To Do"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows = queries.Rows()
+	if len(rows) != 2 || rows[0].Name != "alpha" || label.In(rows[0]) != "Alpha" || rows[1].Name != "zed" || jql.In(rows[1]) != "z" {
+		t.Errorf("queries as the file has them: %+v", rows)
+	}
+	if inner := fields.RowsIn(spaces.Rows()[0]); len(inner) != 1 || inner[0].Name != "Team" || !card.In(inner[0]) {
+		t.Errorf("a table in a table, as the file has it: %+v", inner)
+	}
+	if got := statuses.Get(); got["Open"] != "To Do" || len(got) != 1 {
+		t.Errorf("a map, set: %v", got)
+	}
+	if err := ws.SetConfig(map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if queries.Rows() != nil || queries.IsSet() {
+		t.Errorf("queries with none set: %+v", queries.Rows())
+	}
+}
+
+// A table's fields are declared once each, and a table goes one level
+// down: a plugin that says otherwise doesn't start.
+func TestConfigTablesAreDeclaredProperly(t *testing.T) {
+	if ws, err := plugintest.Start(nil, func(p *plugin.Plugin) {
+		q := p.Config.Table("queries", "Queries")
+		q.String("label", "Label")
+		q.Bool("label", "Label again")
+	}); err == nil || !strings.Contains(err.Error(), `config table queries: field "label" is declared twice`) {
+		if ws != nil {
+			ws.Close()
+		}
+		t.Errorf("a field declared twice: %v", err)
+	}
+	if ws, err := plugintest.Start(nil, func(p *plugin.Plugin) {
+		p.Config.Table("spaces", "Spaces").Table("custom_fields", "Custom fields").Table("options", "Options")
+	}); err == nil || !strings.Contains(err.Error(), `config table spaces.custom_fields: "options" is a table in a table in a table`) {
+		if ws != nil {
+			ws.Close()
+		}
+		t.Errorf("a table three deep: %v", err)
+	}
+}
+
+// A table a Setup read restarts the plugin when its rows change, as a
+// key does.
+func TestAChangeToATableSetupReadRestarts(t *testing.T) {
+	rows := func(names ...string) []protocol.ConfigRow {
+		var out []protocol.ConfigRow
+		for _, n := range names {
+			out = append(out, plugintest.Row(n, map[string]any{"query": "project = " + n}))
+		}
+		return out
+	}
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		queries := p.Config.Table("queries", "Queries")
+		queries.String("query", "JQL")
+		p.Setup(func() {
+			for _, row := range queries.Rows() {
+				p.Command(row.Name, "Issues of "+row.Name, func(*plugin.Call) error { return nil })
+			}
+		})
+	}, plugintest.Config(map[string]any{"queries": rows("bugs", "tasks")}))
+
+	if cmds := ws.Registration().Commands; cmds == nil || len(cmds.Subcommands) != 2 || cmds.Subcommands[1].Name != "tasks" {
+		t.Fatalf("commands declared from a table's rows: %+v", cmds)
+	}
+	ws.SetConfig(map[string]any{"queries": rows("bugs", "tasks")}) //nolint:errcheck // values a test wrote
+	select {
+	case <-ws.Done():
+		t.Fatal("the plugin stopped though the table hadn't changed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	ws.SetConfig(map[string]any{"queries": rows("tasks", "bugs")}) //nolint:errcheck // values a test wrote
+	select {
+	case <-ws.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the plugin went on though the table's rows changed places")
+	}
+}
+
 // A plugin whose registration follows its config exits when that config
 // changes, to be started afresh.
 func TestAChangeToWhatSetupReadRestarts(t *testing.T) {

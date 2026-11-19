@@ -176,7 +176,8 @@ Every field is optional.
   - Both are paths in the plugin's own HTTP. Each starts with `/` (not `//`) and has no `..`. A query is kept as it's given, so a plugin can name what it built (`?v=<a hash of the file>`) and a browser asks again when it's built again.
 - `commands.name` is the word after `ws`. It defaults to the plugin's name.
 - `agent.roles` empty means every role.
-- `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`. `scope` is `shared` (the default) or `local`; a secret is always local.
+- `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`, `map` and `table`. `scope` is `shared` (the default) or `local`; a secret is always local.
+- A `map` is text by text (`columns = { "In Review" = "Review" }`). A `table` is named rows, each holding the key's `fields`: [Config in tables](#config-in-tables).
 - `syncs` is for show (`ws plugin list`); ws doesn't run them. `every` is seconds between runs, `0` for a sync with no interval of its own. `open`, where it's there, is seconds between runs while the plugin's app is on screen ([`view/looking`](#viewlooking-notification)).
 - `refs` are how the plugin's things are named: [Refs](#refs).
 - `actions` are what the plugin can do when it's asked from Find, among what there is to do there: each an `id` (lower-case letters, digits and hyphens), a `title`, and an `icon` and a `hint` if it has them. ws runs one with [`action/run`](#actionrun-request). What can be done to one of its things is the thing's kind's (`refs[].actions`).
@@ -244,6 +245,48 @@ What ws does with them:
 ```
 
 The whole config, as in `initialize`.
+
+### Config in tables
+
+A key of type `table` holds named rows, each with the same fields: the queries a board shows, the projects it knows. It's declared with its fields, which are keys themselves (a type, `required`, a `default`, `help`, `example`), and with `row`, what a row's name is called for whoever's asked for one:
+
+```json
+{ "key": "spaces", "title": "Spaces", "type": "table", "row": "Space key",
+  "fields": [
+    { "key": "label", "title": "Label", "type": "string" },
+    { "key": "columns", "title": "Columns", "type": "map" },
+    { "key": "custom_fields", "title": "Custom fields", "type": "table", "row": "Field",
+      "fields": [ { "key": "card", "title": "On cards", "type": "bool" } ] }
+  ] }
+```
+
+A field is of any type but `secret`. One may be a `table` itself, and its fields may not be: a table goes one level down. Both were added within version 1.
+
+In ws.toml a row is a table under the key, named by the row:
+
+```toml
+[plugin.jira.spaces.ram]
+label = "Risk Modelling"
+columns = { "Ready for Development" = "To Do" }
+
+[plugin.jira.spaces.ram.custom_fields.Team]
+card = true
+```
+
+ws checks each row against the fields: a field that isn't declared, a value of the wrong type and a required field left out are each said, with the row and the field. A field that's wrong is left out, and a row without a field it needs isn't given to the plugin. It lays yours (ws.local.toml) over the team's row by row, then field by field, and leaves out a row that says `enabled = false`, which is how a team's row is taken away in your own file.
+
+The table's value, in `config`, is its rows in the order they were written, the team's first:
+
+```json
+{ "spaces": [
+    { "name": "ram", "values": {
+        "label": "Risk Modelling",
+        "columns": { "Ready for Development": "To Do" },
+        "custom_fields": [ { "name": "Team", "values": { "card": true } } ] } }
+] }
+```
+
+A ws from before tables doesn't know the type: it gives the value as the file has it, an object of objects by row name, with no order and nothing checked, and its commands can't set it. The framework reads both, the second with its rows by name.
 
 ### `command/run` (request)
 
