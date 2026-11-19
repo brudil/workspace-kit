@@ -971,9 +971,10 @@ type Said struct {
 	Ref         string `json:"ref"`
 	Mission     string `json:"mission,omitempty"`
 	PullRequest string `json:"pull_request,omitempty"`
-	// Kind is what it is: mission, decision, comment, review, talk,
-	// thread-ask, thread-change, thread-note, thing, pull-request, page,
-	// artifact, and whatever ws adds.
+	// Kind is what it is: mission, brief, handoff, file, decision,
+	// comment, review, talk, thread-ask, thread-change, thread-note,
+	// thing, pull-request, page, artifact, document, and whatever ws
+	// adds.
 	Kind  string `json:"kind"`
 	Title string `json:"title"`
 	// State is where it stands, in its kind's words, and Standing whether

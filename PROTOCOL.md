@@ -546,10 +546,10 @@ One of the workspace's things as `ws show` shows it: what it is, what it links t
 - `head` is what it is, in a line, and `body` the essentials of it, as `ws show` prints them: plain text, a line or a paragraph each. One of the plugin's own things is as the plugin last told ws.
 - `links` are what it links to. Each is asked for in turn with its `ref`, and the `mission` this was asked with.
 - `said` is what points at it, what still stands first, then latest first. `ref` is its ref where it's read: in `mission`, or under `pull_request` (`api#12`), or, with neither, the workspace's. A mission's own `ref` is its slug. Each is asked for in turn with its `ref` and `mission` as they are, and one under a pull request by the pull request.
-- `kind` is what it is: `mission`, `decision`, `comment`, `review`, `talk`, `thread-ask`, `thread-change`, `thread-note`, `thing`, `pull-request`, `page`, `artifact`, and whatever ws adds. `state` is where it stands in its kind's words, and `standing` whether that's still in play.
+- `kind` is what it is: `mission`, `brief`, `handoff`, `file`, `decision`, `comment`, `review`, `talk`, `thread-ask`, `thread-change`, `thread-note`, `thing`, `pull-request`, `page`, `artifact`, `document`, and whatever ws adds. `state` is where it stands in its kind's words, and `standing` whether that's still in play.
 - `how` is how it points: `about`, `on`, `by`, `for`, `of`, `in`, `from`, `mentions`, `lands`, and whatever ws adds. `lines` is where in a file, as they were when it was said, and `at` when it was said, absent where ws hasn't when.
 - `path` is its page in ws's web UI, where it has one: what a plugin's app opens with `ws:open`.
-- ws says what it has linked. Something written in a brief or a document that only names a thing isn't linked yet, so isn't in `said`.
+- ws says what it has linked: a mission that's about it, and whatever names it where words are kept (a conversation's turn, a mission's brief, a handoff, a decision, a document).
 
 Nothing by that name is `-32001`.
 
