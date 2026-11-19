@@ -129,7 +129,7 @@ Every field is optional.
     "name": "jira",
     "short": "Jira issues",
     "subcommands": [
-      { "name": "mine", "short": "Issues assigned to you", "args": "" }
+      { "name": "mine", "short": "Issues assigned to you", "args": "", "conversations": true }
     ]
   },
   "agent": {
@@ -175,6 +175,7 @@ Every field is optional.
   - `ui.style` is optional: a stylesheet, loaded before the app. The plugin serves it as `text/css`.
   - Both are paths in the plugin's own HTTP. Each starts with `/` (not `//`) and has no `..`. A query is kept as it's given, so a plugin can name what it built (`?v=<a hash of the file>`) and a browser asks again when it's built again.
 - `commands.name` is the word after `ws`. It defaults to the plugin's name.
+- `commands.subcommands[].conversations` is a command a conversation's agent may run itself. A conversation's agent otherwise changes nothing and proposes ([Proposals](#proposals)): ws adds a command marked so to what the agent may run, and tells it so. Added within version 1: a ws from before it runs none of a plugin's commands in a conversation.
 - `agent.roles` empty means every role.
 - `config[].type` is one of `string`, `url`, `bool`, `number`, `enum`, `list`, `secret`, `map` and `table`. `scope` is `shared` (the default) or `local`; a secret is always local.
 - A `map` is text by text (`columns = { "In Review" = "Review" }`). A `table` is named rows, each holding the key's `fields`: [Config in tables](#config-in-tables).

@@ -100,6 +100,7 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `p.View`, with `plugin.Icon`, `Under`, `At` | An entry in ws's sidebar, which opens the app at a path. |
 | `p.Handle`, `p.HandleFunc` | What the app asks the plugin, as `net/http` takes it: `"GET /api/issues/{key}"`. A path nothing handles is a plain 404. |
 | `p.Command` | `ws <plugin> <name>`. Return data and it's printed as a table for a person, JSON for `-f json`, markdown for `-f llm`. |
+| `.Conversations()` | On a command: a conversation's agent may run it itself, not only propose. For what's fine changed as the user watches (a drawing they can undo) and for reads; what acts for the user outside ws is a proposal. |
 | `c.Stdin`, `c.Piped` | What's piped to a command (`ws <plugin> <name> < ops.json`), or the person typing. Read from ws as the command reads it; not `os.Stdin`, which is the plugin's connection. |
 | `p.DB()` | A SQLite database in the plugin's data folder, with `migrations/*.sql` applied in order before anything runs. Pure Go: no C compiler. |
 | `p.Sync` | The one place a plugin talks to its service: at start, on an interval, and on demand, one at a time, retried when it fails. Everything else reads the database. |

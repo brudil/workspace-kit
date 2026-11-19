@@ -22,6 +22,8 @@ type Command struct {
 	// timeout is how long it may run, where that isn't the plugin's
 	// CommandTimeout.
 	timeout *time.Duration
+	// conversations is a command a conversation's agent may run.
+	conversations bool
 }
 
 // flag is a flag a command takes: on or off, or (takesValue) with a value.
@@ -66,6 +68,19 @@ func (c *Command) Option(name, usage string) *Command {
 // "[QUERY]".
 func (c *Command) Args(usage string) *Command {
 	c.args = usage
+	return c
+}
+
+// Conversations lets a conversation's agent run the command itself.
+// Elsewhere in a conversation the agent changes nothing, it proposes, and
+// the user accepts: a command marked here is one whose change is fine
+// made as the user watches, such as a drawing they see change and can
+// undo, or one that only reads. ws adds it to what the agent may run, and
+// tells it so. Mark nothing that reaches outside the workspace on the
+// user's behalf (a comment posted, an issue moved): that's a proposal
+// (p.Proposes).
+func (c *Command) Conversations() *Command {
+	c.conversations = true
 	return c
 }
 

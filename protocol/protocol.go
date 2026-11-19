@@ -216,6 +216,11 @@ type Subcommand struct {
 	Name  string `json:"name"`
 	Short string `json:"short,omitempty"`
 	Args  string `json:"args,omitempty"`
+	// Conversations is a command a conversation's agent may run itself,
+	// not only propose: what it changes is changed as the agent runs it.
+	// An addition to version 1: a ws from before it runs none of a
+	// plugin's commands in a conversation.
+	Conversations bool `json:"conversations,omitempty"`
 }
 
 // Agent is what agents are told of the plugin. No roles means every role.

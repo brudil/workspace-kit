@@ -641,6 +641,17 @@ func TestACommandThatDoesntReadItsInputIsntHeldUp(t *testing.T) {
 	}
 }
 
+func TestACommandMarkedForConversationsIsRegisteredSo(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("show", "", func(*plugin.Call) error { return nil }).Conversations()
+		p.Command("post", "", func(*plugin.Call) error { return nil })
+	})
+	cmds := ws.Registration().Commands
+	if cmds == nil || len(cmds.Subcommands) != 2 || !cmds.Subcommands[0].Conversations || cmds.Subcommands[1].Conversations {
+		t.Errorf("commands: %+v", cmds)
+	}
+}
+
 func TestACommandOutOfTimeSaysSo(t *testing.T) {
 	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
 		p.CommandTimeout = 20 * time.Millisecond
