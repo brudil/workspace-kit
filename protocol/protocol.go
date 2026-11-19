@@ -50,6 +50,14 @@ const (
 	// MethodViewLooking is an addition to version 1: a ws from before it
 	// never says who's looking, and a plugin from before it drops it.
 	MethodViewLooking = "view/looking" // notification
+	// MethodProposalDraft is a conversation's agent proposing one of the
+	// plugin's Proposes: ProposalDraftParams → ProposalDraftResult. With
+	// no input, it's asking how one's written. An addition to version 1:
+	// a plugin that registers Proposes answers it.
+	MethodProposalDraft = "proposal/draft" // request
+	// MethodProposalAccept is the user accepting what was drafted, all of
+	// it or some of its items: ProposalAcceptParams → ProposalAcceptResult.
+	MethodProposalAccept = "proposal/accept" // request
 )
 
 // What a plugin sends ws: notifications all.
@@ -154,7 +162,12 @@ type Registration struct {
 	// Actions are things the plugin can do, offered among what there is
 	// to do in Find. What can be done to one of its things is the thing's
 	// kind's (Ref.Actions).
-	Actions       []Action    `json:"actions,omitempty"`
+	Actions []Action `json:"actions,omitempty"`
+	// Proposes are what a conversation's agent may propose of the
+	// plugin's, for the user to accept: issues to create, say. The plugin
+	// says how one's written, checks what's written, and does it once
+	// it's accepted; ws keeps it, draws it and asks the user.
+	Proposes      []Proposes  `json:"proposes,omitempty"`
 	ConfigVersion int         `json:"config_version,omitempty"`
 	Config        []ConfigKey `json:"config,omitempty"`
 }
@@ -1007,4 +1020,128 @@ type ConversationStartParams struct {
 type ConversationStarted struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
+}
+
+// Proposes is something a conversation's agent may propose of the
+// plugin's: its id (the agent names it plugin:id), what it's called on
+// the card that asks the user, and When, a line or two for the agent's
+// first message on when to propose it. How one's written is the plugin's
+// to say when it's asked (ProposalDraftParams with no input), as it is
+// then.
+type Proposes struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
+	When  string `json:"when,omitempty"`
+}
+
+// ProposesProblem says what's wrong with a list of proposes as
+// registered, or "".
+func ProposesProblem(list []Proposes) string {
+	seen := map[string]bool{}
+	for _, p := range list {
+		switch {
+		case !actionID.MatchString(p.ID):
+			return fmt.Sprintf("what it proposes, %q, must be lower-case letters, digits and hyphens, starting with a letter", p.ID)
+		case seen[p.ID]:
+			return fmt.Sprintf("it proposes %q twice", p.ID)
+		case strings.TrimSpace(p.Title) == "":
+			return fmt.Sprintf("what it proposes, %q, has no title: it's what the card calls it", p.ID)
+		}
+		seen[p.ID] = true
+	}
+	return ""
+}
+
+// ProposalDraftParams is a conversation's agent proposing something of
+// the plugin's: which (ID), and what it wrote (Input, JSON of the
+// plugin's own shape). No Input: it's asking how one's written. Where:
+// the conversation it's proposed in, and its mission's slug, if it's a
+// mission's.
+type ProposalDraftParams struct {
+	ID           string          `json:"id"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Conversation string          `json:"conversation"`
+	Mission      string          `json:"mission,omitempty"`
+}
+
+// ProposalDraftResult answers a draft with one of: Guide, how one's
+// written (asked with no input); Refused, what's wrong with what was
+// written and what to write instead, for the agent; or Proposal, what
+// the user's asked to accept.
+type ProposalDraftResult struct {
+	Guide    string    `json:"guide,omitempty"`
+	Refused  string    `json:"refused,omitempty"`
+	Proposal *Proposal `json:"proposal,omitempty"`
+}
+
+// Proposal is what the plugin will do once it's accepted, as the user's
+// shown it: a line for the whole (Title: "3 issues in RAM"), and its
+// items, each accepted or not. The plugin is trusted to do what it says
+// here, and only that.
+type Proposal struct {
+	Title string         `json:"title"`
+	Items []ProposalItem `json:"items"`
+}
+
+// ProposalItem is one thing to be done: what it's called, the thing it's
+// done to (On, a name: RAM-12; "" for one made), what it'll be, row by
+// row, and at length (Markdown), and Payload, the plugin's own, which ws
+// keeps and sends back as it was when the item's accepted. An item names
+// an earlier one of the same proposal as #1, #2…; what it made is given
+// when it's accepted.
+type ProposalItem struct {
+	Title    string          `json:"title"`
+	On       string          `json:"on,omitempty"`
+	Rows     []ProposalRow   `json:"rows,omitempty"`
+	Markdown string          `json:"markdown,omitempty"`
+	Payload  json.RawMessage `json:"payload"`
+}
+
+// ProposalRow is a label and what it'll be, and, for a change to
+// something that's there, what it was (Was, nil for a row that isn't a
+// change).
+type ProposalRow struct {
+	Label string  `json:"label"`
+	Value string  `json:"value"`
+	Was   *string `json:"was,omitempty"`
+}
+
+// ProposalAcceptParams is the user accepting items of what was drafted
+// (ID): by their number in it, from 1, each with its payload, in order.
+// Made is what items accepted before made, by number, for an item that
+// names one (#1). Key is ws's for the proposal, the same each time it's
+// asked: an item's is Key/N, and one that was made already isn't made
+// again.
+type ProposalAcceptParams struct {
+	ID           string         `json:"id"`
+	Key          string         `json:"key"`
+	Items        []AcceptItem   `json:"items"`
+	Made         map[int]string `json:"made,omitempty"`
+	Conversation string         `json:"conversation"`
+	Mission      string         `json:"mission,omitempty"`
+}
+
+// AcceptItem is one item accepted: its number in the proposal, and its
+// payload as drafted.
+type AcceptItem struct {
+	N       int             `json:"n"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// ProposalAcceptResult is what came of each item asked, in order.
+type ProposalAcceptResult struct {
+	Items []AcceptedItem `json:"items"`
+}
+
+// AcceptedItem is what came of one item: Made, the name of what it made
+// or changed (RAM-130), and Say, a line on it; or Problem, why it wasn't
+// done (it's left to be accepted again). Open is a path in the plugin's
+// app to see it at.
+type AcceptedItem struct {
+	N       int    `json:"n"`
+	Made    string `json:"made,omitempty"`
+	Say     string `json:"say,omitempty"`
+	Open    string `json:"open,omitempty"`
+	Problem string `json:"problem,omitempty"`
 }

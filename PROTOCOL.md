@@ -181,6 +181,7 @@ Every field is optional.
 - `syncs` is for show (`ws plugin list`); ws doesn't run them. `every` is seconds between runs, `0` for a sync with no interval of its own. `open`, where it's there, is seconds between runs while the plugin's app is on screen ([`view/looking`](#viewlooking-notification)).
 - `refs` are how the plugin's things are named: [Refs](#refs).
 - `actions` are what the plugin can do when it's asked from Find, among what there is to do there: each an `id` (lower-case letters, digits and hyphens), a `title`, and an `icon` and a `hint` if it has them. ws runs one with [`action/run`](#actionrun-request). What can be done to one of its things is the thing's kind's (`refs[].actions`).
+- `proposes` are what a conversation's agent may propose of the plugin's, for the user to accept: [Proposals](#proposals).
 
 Not built yet, and ignored if sent: `events`, `actions`.
 
@@ -371,6 +372,59 @@ Done, it says what came of it. Both are optional:
 - `open` is a path in the plugin's app, which ws goes to.
 
 A plugin that changes one of its things tells ws of it as it now is ([`thing/put`](#thingput-request)). An action that fails is an error, whose message is said. ws gives a plugin two minutes.
+
+### Proposals
+
+A conversation's agent in ws changes nothing, but proposes, and the user accepts what it proposed, or not, with a card under its reply. A plugin adds to what it may propose (issues to create, a field to change) with `proposes` in its registration, each:
+
+```json
+{ "id": "issues", "title": "Jira issues", "icon": "ticket", "when": "Issues to create, once the conversation settles on work for the board." }
+```
+
+- `id` is lower-case letters, digits and hyphens; the agent names it as the plugin's name, a colon, and the id (`jira:issues`). `title` is what the card calls it. `when` is a line or two for the agent's first message: when to propose it.
+
+What's proposed is in the plugin's own shape, which ws doesn't read: the plugin says how it's written, checks it, says what it'll do, and does it. ws keeps it, draws it and asks the user. The plugin is trusted to do what it said it would, and only that.
+
+#### `proposal/draft` (request)
+
+The agent proposing (`ws propose jira:issues`). Added within version 1: a plugin that registers `proposes` answers it.
+
+```json
+{ "id": "issues", "input": [ { "summary": "Cache tokens", "project": "RAM" } ], "conversation": "w3", "mission": "" }
+```
+
+- No `input`: the agent's asking how one's written, before it writes one. Answer `{ "guide": "…" }`: as it is now (the projects there are, the fields each asks for), with the JSON to write and an example.
+- With `input`, answer `{ "refused": "…" }` for what's wrong with it, saying what to write instead (the agent reads it, and writes it again), or what accepting it will do:
+
+```json
+{ "proposal": { "title": "2 issues in RAM", "items": [
+  { "title": "Cache tokens", "rows": [ { "label": "Project", "value": "RAM" } ], "markdown": "…", "payload": { … } },
+  { "title": "Expire them", "on": "", "rows": [ { "label": "Parent", "value": "#1" } ], "payload": { … } } ] } }
+```
+
+- Each item is one thing done, accepted on its own or with the rest. `title` and `rows` (a `label` and a `value`, and `was` for a change to something that's there) and `markdown` are what the user's shown. `on` is the thing it changes, by name, for an item that changes one. `payload` is the plugin's own: ws keeps it and sends it back as it was.
+- An item names an earlier one as `#1`, `#2`…: what that made is given when it's accepted.
+- ws refuses a proposal of more than 50 items.
+
+#### `proposal/accept` (request)
+
+The user accepting items of a proposal, in order:
+
+```json
+{ "id": "issues", "key": "w3/4", "items": [ { "n": 2, "payload": { … } } ], "made": { "1": "RAM-130" }, "conversation": "w3" }
+```
+
+- `n` is an item's number in the proposal, from 1. `made` is what items accepted before made, by number.
+- `key` is the proposal's, the same however often it's asked; an item's is `key/n`. ws asks again when it didn't hear an answer, and an item done already under its key isn't done again: answer as it was.
+
+```json
+{ "items": [ { "n": 2, "made": "RAM-131", "say": "Created RAM-131", "open": "/issue/RAM-131" } ] }
+```
+
+- `made` is the name of what it made or changed: ws links the conversation to it, and tells the agent. `say` is a line on it, `open` a path in the plugin's app.
+- An item that wasn't done says why in `problem`: it stays on the card, to be accepted again.
+
+A plugin built on the kit has all of this from `p.Proposes(id, title).When(…).Guide(…).Draft(…).Accept(…)`, which keeps what's done under its key.
 
 ### `view/looking` (notification)
 
