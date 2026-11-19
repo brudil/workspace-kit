@@ -22,6 +22,8 @@ type Command struct {
 	// timeout is how long it may run, where that isn't the plugin's
 	// CommandTimeout.
 	timeout *time.Duration
+	// conversations is a command a conversation's agent may run.
+	conversations bool
 }
 
 // flag is a flag a command takes: on or off, or (takesValue) with a value.
@@ -69,6 +71,19 @@ func (c *Command) Args(usage string) *Command {
 	return c
 }
 
+// Conversations lets a conversation's agent run the command itself.
+// Elsewhere in a conversation the agent changes nothing, it proposes, and
+// the user accepts: a command marked here is one whose change is fine
+// made as the user watches, such as a drawing they see change and can
+// undo, or one that only reads. ws adds it to what the agent may run, and
+// tells it so. Mark nothing that reaches outside the workspace on the
+// user's behalf (a comment posted, an issue moved): that's a proposal
+// (p.Proposes).
+func (c *Command) Conversations() *Command {
+	c.conversations = true
+	return c
+}
+
 // Timeout is how long the command may run, in place of the plugin's
 // CommandTimeout. 0 is as long as it likes: for one that runs until it's
 // stopped (Ctrl-C ends its Context).
@@ -91,12 +106,15 @@ type Call struct {
 	ctx     context.Context
 	p       *Plugin
 	cmd     *Command
+	id      string // ws's name for this run
 	args    []string
 	flags   map[string]bool
 	options map[string]string
 	format  string
 	dir     string
 	term    protocol.Terminal
+	input   string // protocol.InputPiped, InputTerminal, or "": nothing to read
+	in      io.Reader
 	out     io.Writer
 	err     io.Writer
 }
@@ -144,6 +162,69 @@ func (c *Call) Stdout() io.Writer { return c.out }
 
 // Stderr is the command's error output.
 func (c *Call) Stderr() io.Writer { return c.err }
+
+// Stdin is the command's standard input: what was piped to it (ws sketch
+// edit sketch-4 < ops.json), or the person typing at the terminal. It
+// reads from ws as it's read, so a command that doesn't read it never
+// waits on it. Nothing to read, from a ws from before it gave commands
+// their input. Piped says which. Not os.Stdin: that's the plugin's
+// connection to ws.
+func (c *Call) Stdin() io.Reader {
+	if c.in == nil {
+		if c.input == "" {
+			c.in = strings.NewReader("")
+		} else {
+			c.in = &inputReader{c: c}
+		}
+	}
+	return c.in
+}
+
+// Piped is whether something was piped to the command: its standard
+// input is a pipe or a file, not a terminal. A command that takes its
+// input either as an argument or piped asks this before it reads, so it
+// doesn't sit waiting for a person who meant to give it an argument.
+func (c *Call) Piped() bool { return c.input == protocol.InputPiped }
+
+// inputReader reads a command's standard input from ws, a command/read
+// at a time.
+type inputReader struct {
+	c    *Call
+	left []byte // read from ws, not yet from the reader
+	eof  bool
+	err  error
+}
+
+func (r *inputReader) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	for len(r.left) == 0 {
+		if r.eof {
+			return 0, io.EOF
+		}
+		if r.err != nil {
+			return 0, r.err
+		}
+		ctx := r.c.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var got protocol.CommandReadResult
+		err := r.c.p.ask(ctx, protocol.MethodCommandRead, protocol.CommandReadParams{ID: r.c.id, Max: min(len(b), protocol.ReadAtOnce)}, &got)
+		if err != nil {
+			r.err = fmt.Errorf("reading the command's input: %w", err)
+			return 0, r.err
+		}
+		r.left, r.eof = got.Data, got.EOF
+		if len(got.Data) == 0 && !got.EOF {
+			r.err = errors.New("reading the command's input: ws gave nothing, and didn't say it was the end")
+		}
+	}
+	n := copy(b, r.left)
+	r.left = r.left[n:]
+	return n, nil
+}
 
 // ExitError is an error that ends a command with a code of its choosing.
 type ExitError struct {
@@ -195,7 +276,7 @@ func (p *Plugin) runCommand(ctx context.Context, in protocol.CommandRunParams) i
 		p.help(errw)
 		return 2
 	}
-	call := &Call{p: p, cmd: cmd, dir: in.Dir, term: in.Terminal, out: out, err: errw, format: FormatTable}
+	call := &Call{p: p, cmd: cmd, id: in.ID, dir: in.Dir, term: in.Terminal, input: in.Input, out: out, err: errw, format: FormatTable}
 	help, err := call.parse(args[1:])
 	if err != nil {
 		fmt.Fprintf(errw, "%v\n\n", err)

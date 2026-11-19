@@ -610,6 +610,48 @@ func TestATableIsCutToTheTerminal(t *testing.T) {
 	}
 }
 
+func TestACommandReadsWhatsPipedToIt(t *testing.T) {
+	// More than one read's worth, cut through a character, so it comes in
+	// pieces and has to go back together byte for byte.
+	piped := strings.Repeat("é", protocol.ReadAtOnce) + "\x00\xff end"
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("count", "", func(c *plugin.Call) error {
+			b, err := io.ReadAll(c.Stdin())
+			if err != nil {
+				return err
+			}
+			return c.Say(fmt.Sprintf("piped %v, %d bytes, same %v", c.Piped(), len(b), string(b) == piped))
+		})
+	})
+	if got := ws.Pipe(piped, "count"); got.Exit != 0 || got.Stdout != fmt.Sprintf("piped true, %d bytes, same true\n", len(piped)) {
+		t.Errorf("a command read what was piped: %+v", got)
+	}
+	// Run pipes nothing, as a ws from before input: nothing to read.
+	if got := ws.Run("count"); got.Exit != 0 || got.Stdout != "piped false, 0 bytes, same false\n" {
+		t.Errorf("a command with nothing piped: %+v", got)
+	}
+}
+
+func TestACommandThatDoesntReadItsInputIsntHeldUp(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("hi", "", func(c *plugin.Call) error { return c.Say("hi") })
+	})
+	if got := ws.Pipe("never read", "hi"); got.Exit != 0 || got.Stdout != "hi\n" {
+		t.Errorf("a command that didn't read its input: %+v", got)
+	}
+}
+
+func TestACommandMarkedForConversationsIsRegisteredSo(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("show", "", func(*plugin.Call) error { return nil }).Conversations()
+		p.Command("post", "", func(*plugin.Call) error { return nil })
+	})
+	cmds := ws.Registration().Commands
+	if cmds == nil || len(cmds.Subcommands) != 2 || !cmds.Subcommands[0].Conversations || cmds.Subcommands[1].Conversations {
+		t.Errorf("commands: %+v", cmds)
+	}
+}
+
 func TestACommandOutOfTimeSaysSo(t *testing.T) {
 	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
 		p.CommandTimeout = 20 * time.Millisecond
