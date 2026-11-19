@@ -502,6 +502,66 @@ func (ws *WS) act(in protocol.ActionRunParams) (protocol.ActionRunResult, error)
 	return out, ws.conn.Call(context.Background(), protocol.MethodActionRun, in, &out)
 }
 
+// Guide asks how one of what the plugin proposes is written, as a
+// conversation's agent does first.
+func (ws *WS) Guide(id string) (string, error) {
+	out, err := ws.DraftInput(id, nil)
+	return out.Guide, err
+}
+
+// Draft proposes one of what the plugin proposes, written as input (JSON:
+// a json.RawMessage or string as it is, anything else encoded), as a
+// conversation's agent does in w1: what's answered is what it drafted,
+// or why it's refused.
+func (ws *WS) Draft(id string, input any) (protocol.ProposalDraftResult, error) {
+	var raw json.RawMessage
+	switch v := input.(type) {
+	case json.RawMessage:
+		raw = v
+	case string:
+		raw = json.RawMessage(v)
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return protocol.ProposalDraftResult{}, err
+		}
+		raw = data
+	}
+	return ws.DraftInput(id, raw)
+}
+
+// DraftInput is Draft with the input as it's sent: nil asks for the guide.
+func (ws *WS) DraftInput(id string, input json.RawMessage) (protocol.ProposalDraftResult, error) {
+	var out protocol.ProposalDraftResult
+	return out, ws.conn.Call(context.Background(), protocol.MethodProposalDraft, protocol.ProposalDraftParams{ID: id, Input: input, Conversation: "w1"}, &out)
+}
+
+// Accept accepts items of what was drafted (by number, from 1; none: all
+// of them), as the user does, under key: asked again under the same key,
+// an item done already isn't done again.
+func (ws *WS) Accept(id, key string, drafted *protocol.Proposal, items ...int) (protocol.ProposalAcceptResult, error) {
+	if drafted == nil {
+		return protocol.ProposalAcceptResult{}, errors.New("plugintest: Accept: nothing was drafted (the draft was refused?)")
+	}
+	if len(items) == 0 {
+		for i := range drafted.Items {
+			items = append(items, i+1)
+		}
+	}
+	in := protocol.ProposalAcceptParams{ID: id, Key: key, Conversation: "w1"}
+	for _, n := range items {
+		in.Items = append(in.Items, protocol.AcceptItem{N: n, Payload: drafted.Items[n-1].Payload})
+	}
+	return ws.AcceptItems(in)
+}
+
+// AcceptItems is Accept as it's sent: with what items accepted before
+// made, for one that names them.
+func (ws *WS) AcceptItems(in protocol.ProposalAcceptParams) (protocol.ProposalAcceptResult, error) {
+	var out protocol.ProposalAcceptResult
+	return out, ws.conn.Call(context.Background(), protocol.MethodProposalAccept, in, &out)
+}
+
 // Protocol is the version of the plugin protocol the handshake chose.
 func (ws *WS) Protocol() int { return ws.ver }
 

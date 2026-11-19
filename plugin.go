@@ -75,13 +75,16 @@ type Plugin struct {
 	syncs       []*syncer
 	refs        []*Ref
 	actions     []*Action
-	setups      []func()
-	onConfig    []func()
-	onLooking   []func(Looking)
-	guide       string
-	guideSet    bool
-	roles       []string
-	declErrs    []error
+	proposals   []*Proposal
+	// accepting is held while a proposal's items are done: one at a time.
+	accepting sync.Mutex
+	setups    []func()
+	onConfig  []func()
+	onLooking []func(Looking)
+	guide     string
+	guideSet  bool
+	roles     []string
+	declErrs  []error
 
 	mu       sync.Mutex
 	started  bool // Run has answered initialize: nothing more can be declared
@@ -349,6 +352,26 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 		p.running.Add(1)
 		defer p.running.Done()
 		return p.runAction(ctx, in)
+	case protocol.MethodProposalDraft, protocol.MethodProposalAccept:
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		if method == protocol.MethodProposalDraft {
+			var in protocol.ProposalDraftParams
+			if err := json.Unmarshal(params, &in); err != nil {
+				return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+			}
+			return p.draftProposal(ctx, in)
+		}
+		var in protocol.ProposalAcceptParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		return p.acceptProposal(ctx, in)
 	case protocol.MethodShutdown:
 		// Commands being run get a moment to finish and be answered.
 		finished := make(chan struct{})
@@ -451,6 +474,9 @@ func (p *Plugin) prepare() (protocol.Registration, error) {
 	if _, err := p.actionsDeclared(); err != nil {
 		p.declErrs = append(p.declErrs, err)
 	}
+	if _, err := p.proposalsDeclared(); err != nil {
+		p.declErrs = append(p.declErrs, err)
+	}
 	if len(p.declErrs) > 0 {
 		return protocol.Registration{}, errors.Join(p.declErrs...)
 	}
@@ -479,6 +505,7 @@ func (p *Plugin) registration() protocol.Registration {
 	}
 	reg.Refs, _ = p.refsDeclared()
 	reg.Actions, _ = p.actionsDeclared()
+	reg.Proposes, _ = p.proposalsDeclared()
 	reg.Config = p.Config.spec()
 	return reg
 }
