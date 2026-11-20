@@ -2,10 +2,10 @@
 // already there and an empty #root. This connects to ws, asks the plugin
 // for its greeting, and renders into #root.
 
-import { type Client, connect } from "@withworkspace/ui-lib";
-// What the plugin answers at /api/hello and /api/visits, written from its
-// Go (main.go) by `go tool apigen`.
-import type { Hello } from "./api.gen";
+import { type Client, connect, endpoints } from "@withworkspace/ui-lib";
+// What the plugin's endpoints take and answer, written from its Go
+// (main.go) by `go tool apigen`.
+import type { Api, Hello } from "./api.gen";
 
 async function main() {
   let ws: Client;
@@ -19,12 +19,10 @@ async function main() {
   }
   ws.setTitle("Hello");
 
-  // The plugin's own HTTP is at ws.api(path).
-  async function ask(path: string, method = "GET"): Promise<Hello> {
-    const res = await fetch(ws.api(path), { method });
-    if (!res.ok) throw new Error((await res.text()) || `${path} answered ${res.status}`);
-    return (await res.json()) as Hello;
-  }
+  // The plugin's endpoints, by what each takes and answers: a path that
+  // isn't one of them doesn't compile, and what comes back is a Hello
+  // because the Go says so.
+  const plugin = endpoints<Api>(ws);
 
   function show(hello: Hello) {
     const h1 = document.createElement("h1");
@@ -47,11 +45,11 @@ async function main() {
   }
 
   // Each look at the app is counted, as it loads.
-  ask("/api/visits", "POST").then(show, failed);
+  plugin.post("/api/visits").then(show, failed);
 
   // The plugin said what this shows is stale (the greeting was changed in
   // Settings, say): ask again.
-  ws.onChanged(() => ask("/api/hello").then(show, failed));
+  ws.onChanged(() => plugin.get("/api/hello").then(show, failed));
 }
 
 void main();
