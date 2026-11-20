@@ -18,6 +18,8 @@ package plugintest
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -406,22 +408,74 @@ func (ws *WS) Repos(repos ...protocol.Repo) {
 	})
 }
 
-// Remotes are the things the stand-in has found in its repos: what it
-// answers Ref.Remotes and Ref.OpenRemote with. Each is a thing as ws
-// found it, and its main file.
-func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) {
+// InRepo is a thing the stand-in has in its repos: the thing and its main
+// file, and the package it was last promoted or saved as, where it was.
+type InRepo struct {
+	protocol.RemoteOpened
+	Package protocol.RemotePackage
+	// From is the plugin's own name for the thing it was promoted from.
+	From string
+}
+
+// Remotes are the things the stand-in has in its repos: what it answers
+// Ref.Remotes and Ref.OpenRemote with, and what Ref.Promote and
+// Ref.SaveRemote change, as ws does: it asks the plugin for the thing
+// (the kind's Export, again with what's there where that's changed
+// since), and tells it once it's there (the kind's Saved). A promoted
+// thing goes in records, in the folder its kind's Remote names for its
+// title's slug (with -2 and so on where that's taken), and a thing's
+// version is its main file's. What's returned is what's there now, in
+// order of name.
+func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) func() []InRepo {
+	var mu sync.Mutex
+	has := map[string]*InRepo{}
+	for _, r := range remotes {
+		has[r.Name] = &InRepo{RemoteOpened: r}
+	}
+	all := func() []InRepo {
+		out := make([]InRepo, 0, len(has))
+		for _, r := range has {
+			out = append(out, *r)
+		}
+		slices.SortFunc(out, func(a, b InRepo) int { return strings.Compare(a.Name, b.Name) })
+		return out
+	}
+	version := func(main []byte) string {
+		sum := sha1.Sum(append([]byte(fmt.Sprintf("blob %d\x00", len(main))), main...))
+		return hex.EncodeToString(sum[:])
+	}
+	// put writes a package into a thing, as its folder would hold it.
+	put := func(r *InRepo, slug string, kind protocol.Ref, pkg protocol.RemotePackage) {
+		r.Title, r.Content, r.Version, r.Package = strings.Join(strings.Fields(pkg.Title), " "), pkg.Main, version(pkg.Main), pkg
+		r.Main, r.Picture = strings.ReplaceAll(kind.Remote.Main, protocol.RemoteSlug, slug), ""
+		for _, f := range pkg.Files {
+			if f.Picture {
+				r.Picture = strings.ReplaceAll(f.Name, protocol.RemoteSlug, slug)
+			}
+		}
+		r.Changed = time.Now().UTC().Truncate(time.Second)
+	}
+	kindOf := func(name string) (protocol.Ref, error) {
+		<-ws.started
+		i := slices.IndexFunc(ws.reg.Refs, func(r protocol.Ref) bool { return r.Kind == name })
+		if i < 0 || ws.reg.Refs[i].Remote == nil {
+			return protocol.Ref{}, &rpc.Error{Code: protocol.CodeInvalidParams, Message: "the plugin has no kind " + name + " whose things live in a repo"}
+		}
+		return ws.reg.Refs[i], nil
+	}
 	ws.Answer(protocol.MethodRemoteList, func(params json.RawMessage) (any, error) {
 		var in protocol.RemoteListParams
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
 		}
+		mu.Lock()
+		defer mu.Unlock()
 		out := protocol.RemoteListResult{Things: []protocol.RemoteThing{}}
-		for _, r := range remotes {
+		for _, r := range all() {
 			if r.Kind == in.Kind {
 				out.Things = append(out.Things, r.RemoteThing)
 			}
 		}
-		slices.SortFunc(out.Things, func(a, b protocol.RemoteThing) int { return strings.Compare(a.Name, b.Name) })
 		return out, nil
 	})
 	ws.Answer(protocol.MethodRemoteOpen, func(params json.RawMessage) (any, error) {
@@ -429,13 +483,165 @@ func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) {
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
 		}
-		for _, r := range remotes {
-			if r.Kind == in.Kind && r.Name == in.Name {
-				return r, nil
-			}
+		mu.Lock()
+		defer mu.Unlock()
+		if r, ok := has[in.Name]; ok && r.Kind == in.Kind {
+			return r.RemoteOpened, nil
 		}
 		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has no " + in.Kind + " at " + in.Name}
 	})
+	// As ws does: the plugin's asked for the thing, and told it's there.
+	export := func(kind, ref string, current *protocol.RemoteOpened) (protocol.RemoteExported, error) {
+		var out protocol.RemoteExported
+		err := ws.conn.Call(context.Background(), protocol.MethodRemoteExport, protocol.RemoteExportParams{Kind: kind, Ref: ref, Current: current}, &out)
+		return out, err
+	}
+	// taken refuses a package ws wouldn't write.
+	taken := func(given protocol.RemoteExported) error {
+		if problem := given.RemotePackage.Problem(); problem != "" {
+			return &rpc.Error{Code: protocol.CodeInvalidParams, Message: problem}
+		}
+		return nil
+	}
+	told := func(kind, ref string, thing protocol.RemoteThing) error {
+		return ws.conn.Call(context.Background(), protocol.MethodRemoteSaved, protocol.RemoteSavedParams{Kind: kind, Ref: ref, Thing: thing}, nil)
+	}
+	ws.Answer(protocol.MethodRemotePromote, func(params json.RawMessage) (any, error) {
+		var in protocol.RemotePromoteParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		kind, err := kindOf(in.Kind)
+		if err != nil {
+			return nil, err
+		}
+		given, err := export(in.Kind, in.Ref, nil)
+		if err != nil {
+			return nil, err
+		}
+		if given.Name != "" {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: in.Ref + " lives at " + given.Name + " already: save it there"}
+		}
+		if err := taken(given); err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		base := slugOf(given.Title)
+		slug, repo, folder := base, "records", ""
+		for n := 2; ; n++ {
+			folder = strings.ReplaceAll(kind.Remote.Path, protocol.RemoteSlug, slug)
+			if to := strings.TrimSpace(in.To); to != "" {
+				// Where the person said: its files are named after the folder.
+				repo, folder, _ = strings.Cut(to, ":")
+				folder = strings.TrimSuffix(folder, "/") + "/"
+				slug = filepath.Base(strings.TrimSuffix(folder, "/"))
+			}
+			if _, taken := has[repo+"/"+folder]; !taken {
+				break
+			}
+			if in.To != "" {
+				mu.Unlock()
+				return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: "there's something at " + in.To + " already"}
+			}
+			slug = fmt.Sprintf("%s-%d", base, n)
+		}
+		r := &InRepo{From: in.Ref}
+		r.Kind, r.Name, r.Repo, r.Path = in.Kind, repo+"/"+folder, repo, folder
+		put(r, slug, kind, given.RemotePackage)
+		has[r.Name] = r
+		thing := r.RemoteThing
+		mu.Unlock()
+		if err := told(in.Kind, in.Ref, thing); err != nil {
+			return nil, err
+		}
+		return protocol.RemoteSaved{Thing: thing, Changed: true, Said: "Promoted to " + repo + ":" + folder}, nil
+	})
+	ws.Answer(protocol.MethodRemoteSave, func(params json.RawMessage) (any, error) {
+		var in protocol.RemoteSaveParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		kind, err := kindOf(in.Kind)
+		if err != nil {
+			return nil, err
+		}
+		given, err := export(in.Kind, in.Ref, nil)
+		if err != nil {
+			return nil, err
+		}
+		if given.Name == "" {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: in.Ref + " isn't in a repo: promote it first"}
+		}
+		there := func() (protocol.RemoteOpened, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			r, ok := has[given.Name]
+			if !ok || r.Kind != in.Kind {
+				return protocol.RemoteOpened{}, false
+			}
+			return r.RemoteOpened, true
+		}
+		now, ok := there()
+		if !ok {
+			return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has no " + in.Kind + " at " + given.Name}
+		}
+		merged := false
+		if given.Base != now.Version {
+			// It's changed there since: the plugin brings the two together.
+			if given, err = export(in.Kind, in.Ref, &now); err != nil {
+				return nil, err
+			}
+			if given.Base != now.Version {
+				return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: in.Ref + " was given what's at " + now.Name + " now, and what came back wasn't made from it"}
+			}
+			merged = true
+		}
+		if err := taken(given); err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		r := has[now.Name]
+		was, _ := json.Marshal(r.Package)
+		next, _ := json.Marshal(given.RemotePackage)
+		changed := string(was) != string(next)
+		if changed {
+			put(r, filepath.Base(strings.TrimSuffix(r.Path, "/")), kind, given.RemotePackage) // its folder's name is its slug
+		}
+		thing := r.RemoteThing
+		mu.Unlock()
+		if err := told(in.Kind, in.Ref, thing); err != nil {
+			return nil, err
+		}
+		return protocol.RemoteSaved{Thing: thing, Changed: changed, Merged: merged, Said: "Saved to " + thing.Repo + ":" + thing.Path}, nil
+	})
+	return func() []InRepo {
+		mu.Lock()
+		defer mu.Unlock()
+		return all()
+	}
+}
+
+// slugOf is a title as the stand-in names a folder for it: its letters
+// and digits, lower-case, a hyphen between runs of them.
+func slugOf(title string) string {
+	var b strings.Builder
+	gap := false
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			if gap && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			gap = false
+			b.WriteRune(r)
+		default:
+			gap = true
+		}
+	}
+	if b.Len() == 0 {
+		return "untitled"
+	}
+	return b.String()
 }
 
 // Read asks the plugin what a main file is found by, as ws does of one it

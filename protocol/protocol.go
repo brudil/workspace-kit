@@ -307,6 +307,11 @@ type Remote struct {
 	// Reads is whether the plugin says what a main file is found by
 	// (MethodRemoteRead). Without it, one is found by its title alone.
 	Reads bool `json:"reads,omitempty"`
+	// Exports is whether the plugin gives one of its own things as a
+	// folder is to hold it (MethodRemoteExport): what ws promotes one,
+	// and saves one, from. Without it, ws puts none of the kind's things
+	// in a repo: they're there by a commit alone.
+	Exports bool `json:"exports,omitempty"`
 }
 
 // ManifestName is the file in a package that says what it is, in TOML:
@@ -910,6 +915,22 @@ const (
 	// MethodRemoteOpen is a plugin asking for one's main file:
 	// RemoteOpenParams → RemoteOpened.
 	MethodRemoteOpen = "remote/open"
+	// MethodRemoteExport is ws asking the plugin for one of its things as
+	// its folder in a repo is to hold it, to promote it or to save it:
+	// RemoteExportParams → RemoteExported. Asked of a kind whose Remote
+	// Exports.
+	MethodRemoteExport = "remote/export"
+	// MethodRemoteSaved is ws telling the plugin that one of its things is
+	// in a repo, as it was exported: RemoteSavedParams → nothing.
+	MethodRemoteSaved = "remote/saved"
+	// MethodRemotePromote is a plugin asking ws to put one of its things
+	// in a repo, for the person who asked it to: RemotePromoteParams →
+	// RemoteSaved. ws asks the plugin for the thing (MethodRemoteExport).
+	MethodRemotePromote = "remote/promote"
+	// MethodRemoteSave is a plugin asking ws to save one of its things
+	// that's in a repo, as the person has it now: RemoteSaveParams →
+	// RemoteSaved.
+	MethodRemoteSave = "remote/save"
 )
 
 // RemoteReadMax is the most of a main file ws sends to be read: one
@@ -980,6 +1001,133 @@ type RemoteOpenParams struct {
 type RemoteOpened struct {
 	RemoteThing
 	Content []byte `json:"content"`
+}
+
+// RemotePackage is a thing as its folder in a repo holds it: what it's
+// called, its main file, and the files the plugin made from the main
+// file. ws writes the folder as it's given, with a ManifestName of its
+// own, in place of whatever was there.
+type RemotePackage struct {
+	Title string `json:"title"`
+	// Main is the main file's content: its name is the kind's.
+	Main []byte `json:"main"`
+	// Files are what's made from it, each by its name in the folder.
+	Files []RemoteFile `json:"files,omitempty"`
+}
+
+// RemoteFile is a file made from a thing's main file: a picture of it.
+type RemoteFile struct {
+	// Name is the file's name in the folder, with RemoteSlug where the
+	// thing's slug goes ({slug}.svg): a name alone, with no folder.
+	Name    string `json:"name"`
+	Content []byte `json:"content"`
+	// Picture: it's the thing's picture, as its manifest says. One at most.
+	Picture bool `json:"picture,omitempty"`
+}
+
+// RemoteExportParams asks for one of the plugin's own things, by its kind
+// and the plugin's name for it (sketch-12), as its folder in a repo is to
+// hold it.
+type RemoteExportParams struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+	// Current is the thing as it is in its repo now, where that isn't the
+	// version the plugin last had of it (a RemoteExported's Base): someone
+	// else saved it since. The plugin brings what's there into what it
+	// has, however its kind merges, and gives the two together, made
+	// from Current's version.
+	Current *RemoteOpened `json:"current,omitempty"`
+}
+
+// RemoteExported is one of the plugin's things as its folder is to hold
+// it: where it lives, if it lives in a repo, the version of it there
+// that this was made from, and the package.
+type RemoteExported struct {
+	// Name is the thing's name in its repo (its folder, as ws names one),
+	// for one that's in one: none for one that isn't yet.
+	Name string `json:"name,omitempty"`
+	// Base is the version of it there that what's given was made from: a
+	// RemoteThing's Version, as the plugin last had it from ws (opened,
+	// told it was saved, or given as Current). None for one that isn't in
+	// a repo.
+	Base string `json:"base,omitempty"`
+	RemotePackage
+}
+
+// RemoteSavedParams tells the plugin one of its things is in a repo, as
+// it was last exported: the plugin's name for it, and the thing as it's
+// there. Its Version is what the plugin's next export is made from.
+type RemoteSavedParams struct {
+	Kind  string      `json:"kind"`
+	Ref   string      `json:"ref"`
+	Thing RemoteThing `json:"thing"`
+}
+
+// RemotePromoteParams asks ws to put one of the plugin's own things in a
+// repo: its kind and the plugin's name for it. ws asks the plugin for it
+// (MethodRemoteExport), names its folder from the kind's Remote and its
+// title, commits it as the person, and lands it as its repo lands.
+type RemotePromoteParams struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+	// To is where it's to live, as the person said (repo:folder/): none
+	// for where the kind's things go.
+	To string `json:"to,omitempty"`
+}
+
+// RemoteSaveParams asks ws to save one of the plugin's own things that's
+// in a repo, as the person has it now.
+type RemoteSaveParams struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+}
+
+// RemoteSaved is what promoting or saving did.
+type RemoteSaved struct {
+	// Thing is the thing as it is in its repo now, or, where its repo
+	// takes pull requests, as it is in the capsule it's been left in.
+	Thing RemoteThing `json:"thing"`
+	// Changed is whether it changed anything there: not when the folder
+	// was as the plugin gave it already.
+	Changed bool `json:"changed,omitempty"`
+	// Merged is whether what's there had changed since the plugin last
+	// had it, and the plugin brought the two together.
+	Merged bool `json:"merged,omitempty"`
+	// Capsule is the capsule it was left in, for the person to open a
+	// pull request from, where its repo takes them: it's on no default
+	// branch yet, and ws finds it once it's merged. None where it landed.
+	Capsule string `json:"capsule,omitempty"`
+	// Said is what was done, in a sentence, for the person.
+	Said string `json:"said,omitempty"`
+}
+
+var remoteFile = regexp.MustCompile(`^[A-Za-z0-9._-]*(\{slug\})?[A-Za-z0-9._-]*$`)
+
+// Problem says what's wrong with a package as it's given, or "".
+func (p RemotePackage) Problem() string {
+	if strings.TrimSpace(p.Title) == "" {
+		return "it has no title: a thing in a repo is called something"
+	}
+	pictures := 0
+	seen := map[string]bool{}
+	for _, f := range p.Files {
+		switch {
+		case f.Name == "" || f.Name == "." || f.Name == ".." || !remoteFile.MatchString(f.Name) || strings.HasPrefix(f.Name, "."):
+			return fmt.Sprintf("its file %q must be a name alone, of letters, digits, dots, hyphens and underscores, with %s where the slug goes", f.Name, RemoteSlug)
+		case strings.EqualFold(f.Name, ManifestName):
+			return fmt.Sprintf("its file %q is ws's own file in the folder", f.Name)
+		case seen[f.Name]:
+			return fmt.Sprintf("its file %q is there twice", f.Name)
+		}
+		seen[f.Name] = true
+		if f.Picture {
+			pictures++
+		}
+	}
+	if pictures > 1 {
+		return "it has more than one picture"
+	}
+	return ""
 }
 
 // CodeNotFound is the answer for something asked for by name that isn't
