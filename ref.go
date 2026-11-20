@@ -319,7 +319,7 @@ type RemoteFile struct {
 
 // RemoteThing is one of a kind's things that lives in a repo, as ws
 // found it: its name, where it is, what it's called, its files' names,
-// and its main file's version.
+// and its version, which is its folder's.
 type RemoteThing = protocol.RemoteThing
 
 // Remote says this kind's things can live in a repo, and how: see Remote.

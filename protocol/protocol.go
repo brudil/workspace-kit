@@ -981,8 +981,9 @@ type RemoteThing struct {
 	// one: both in its folder.
 	Main    string `json:"main"`
 	Picture string `json:"picture,omitempty"`
-	// Version is its main file's content's id: the same for the same
-	// content, and another when it changes.
+	// Version is what its folder holds, as ws names it: the same while
+	// every file in it is, and another when any of them changes. It's
+	// ws's to make: a plugin keeps it, and gives it back.
 	Version string `json:"version"`
 	// Changed is when it last changed in its repo, and ChangedBy who by,
 	// where ws knows.

@@ -392,7 +392,7 @@ A name the plugin has nothing by is error `-32001`. A plugin with nothing to say
 
 ### `remote/read` (request)
 
-What a main file is found by. ws asks of a thing it found in a repo ([Remotes](#remotes)), of a kind whose remote `reads`, once for each version of the file: so what's answered is of the file alone, not of when it's asked. Added within version 1.
+What a main file is found by. ws asks of a thing it found in a repo ([Remotes](#remotes)), of a kind whose remote `reads`, once for each version of the thing (so again where only what's beside the main file changed): what's answered is of the file alone, not of when it's asked. Added within version 1.
 
 ```json
 { "kind": "sketch", "name": "records/sketches/release-flow/", "title": "Release flow",
@@ -765,7 +765,7 @@ The things of that kind that live in the workspace's repos ([Remotes](#remotes))
 
 - `name` is its name in ws, and what it opens by in the plugin's app. `repo` and `path` are where it is: `path` is its folder, ending in `/`.
 - `main` and `picture` are files in its folder, by name.
-- `version` is its main file's content's id: the same for the same content, another when it changes. What a plugin makes from a main file can be kept by it.
+- `version` is what its folder holds, as ws names it: the same while every file in it is, another when any of them changes (its main file, what's made from it, its `thing.toml`). It's ws's to make, and nothing to read: a plugin keeps it, to give back as an export's `base`, and can keep what it makes from a thing by it.
 - `changed` and `changed_by` are when it last changed in its repo and who by, where ws knows.
 
 ### `remote/open` (request)

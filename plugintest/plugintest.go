@@ -424,7 +424,8 @@ type InRepo struct {
 // since), and tells it once it's there (the kind's Saved). A promoted
 // thing goes in records, in the folder its kind's Remote names for its
 // title's slug (with -2 and so on where that's taken), and a thing's
-// version is its main file's. What's returned is what's there now, in
+// version is its folder's: another when its title, its main file or
+// anything made from it changes. What's returned is what's there now, in
 // order of name.
 func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) func() []InRepo {
 	var mu sync.Mutex
@@ -440,13 +441,19 @@ func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) func() []InRepo {
 		slices.SortFunc(out, func(a, b InRepo) int { return strings.Compare(a.Name, b.Name) })
 		return out
 	}
-	version := func(main []byte) string {
-		sum := sha1.Sum(append([]byte(fmt.Sprintf("blob %d\x00", len(main))), main...))
-		return hex.EncodeToString(sum[:])
+	version := func(pkg protocol.RemotePackage) string {
+		h := sha1.New()
+		part := func(name string, content []byte) { fmt.Fprintf(h, "%s\x00%d\x00%s", name, len(content), content) }
+		part("title", []byte(strings.Join(strings.Fields(pkg.Title), " ")))
+		part("main", pkg.Main)
+		for _, f := range pkg.Files {
+			part("file "+f.Name, f.Content)
+		}
+		return hex.EncodeToString(h.Sum(nil))
 	}
 	// put writes a package into a thing, as its folder would hold it.
 	put := func(r *InRepo, slug string, kind protocol.Ref, pkg protocol.RemotePackage) {
-		r.Title, r.Content, r.Version, r.Package = strings.Join(strings.Fields(pkg.Title), " "), pkg.Main, version(pkg.Main), pkg
+		r.Title, r.Content, r.Version, r.Package = strings.Join(strings.Fields(pkg.Title), " "), pkg.Main, version(pkg), pkg
 		r.Main, r.Picture = strings.ReplaceAll(kind.Remote.Main, protocol.RemoteSlug, slug), ""
 		for _, f := range pkg.Files {
 			if f.Picture {
