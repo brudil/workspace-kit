@@ -103,6 +103,12 @@ func TestARefsProblem(t *testing.T) {
 		"2 fields of type state": {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}, {Name: "a", Type: protocol.FieldState}, {Name: "b", Type: protocol.FieldState}}},
 		`found by "body"`:        {Kind: "issue", Prefixes: []string{"RAM-"}, Search: []protocol.Searched{{Field: "body"}}},
 		`path "//`:               {Kind: "issue", Prefixes: []string{"RAM-"}, Path: "//x/{ref}"},
+		"its remote's path":      {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}}, Remote: &protocol.Remote{Path: "issues/", Main: "{slug}.md"}},
+		`path "/issues/{slug}/"`: {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}}, Remote: &protocol.Remote{Path: "/issues/{slug}/", Main: "{slug}.md"}},
+		`path "../{slug}/"`:      {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}}, Remote: &protocol.Remote{Path: "../{slug}/", Main: "{slug}.md"}},
+		"its remote's main file": {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}}, Remote: &protocol.Remote{Path: "issues/{slug}/", Main: "issue.md"}},
+		"ws's own file":          {Kind: "issue", Prefixes: []string{"RAM-"}, Fields: []protocol.Field{{Name: "title", Type: protocol.FieldTitle}}, Remote: &protocol.Remote{Path: "issues/{slug}/", Main: "{slug}hing.toml"}},
+		"no title field":         {Kind: "issue", Prefixes: []string{"RAM-"}, Remote: &protocol.Remote{Path: "issues/{slug}/", Main: "{slug}.md"}},
 	} {
 		if p := r.Problem(); !strings.Contains(p, why) {
 			t.Errorf("%+v: %q, want it to say %q", r, p, why)

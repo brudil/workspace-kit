@@ -1681,3 +1681,189 @@ func TestAFieldNamesOtherThings(t *testing.T) {
 		t.Errorf("fields: %s", got)
 	}
 }
+
+// A kind whose things can live in a repo says so, and how. ws finds
+// those, so the plugin answers what one's file is found by, and asks ws
+// which there are and for one's file.
+func TestAKindsThingsLiveInARepo(t *testing.T) {
+	var sketch *plugin.Ref
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		sketch = p.Ref("sketch", "Sketch").
+			Prefix("sketch-").
+			Fields(plugin.Title("title"), plugin.Markdown("text", "On it")).
+			Remote(plugin.Remote{
+				Path: "sketches/{slug}/",
+				Main: "{slug}.excalidraw",
+				Read: func(_ context.Context, f plugin.RemoteFile) (map[string]string, error) {
+					if len(f.Content) == 0 {
+						return nil, errors.New(f.File + " is empty")
+					}
+					return map[string]string{"text": f.Title + ": " + string(f.Content)}, nil
+				},
+			})
+		p.Ref("note", "Note").Prefix("note-").Fields(plugin.Title("title")).Remote(plugin.Remote{Path: "notes/{slug}/", Main: "{slug}.txt"})
+	})
+	ctx := context.Background()
+
+	// What ws is told: where one goes, and that the plugin reads one.
+	reg := ws.Registration()
+	if r := reg.Refs[0].Remote; r == nil || *r != (protocol.Remote{Path: "sketches/{slug}/", Main: "{slug}.excalidraw", Reads: true}) {
+		t.Errorf("the sketch's remote, as registered: %+v", r)
+	}
+	if r := reg.Refs[1].Remote; r == nil || r.Reads {
+		t.Errorf("the note's remote, as registered: %+v", r)
+	}
+
+	// ws asks what a file is found by.
+	fields, err := ws.Read("sketch", "records/sketches/release-flow/", "Release flow", "release-flow.excalidraw", []byte("boxes"))
+	if err != nil || fmt.Sprint(fields) != fmt.Sprint(map[string]string{"text": "Release flow: boxes"}) {
+		t.Errorf("read: %v, %v", fields, err)
+	}
+	if _, err := ws.Read("sketch", "records/sketches/empty/", "Empty", "empty.excalidraw", nil); err == nil || !strings.Contains(err.Error(), "empty.excalidraw is empty") {
+		t.Errorf("a file it can't read: %v", err)
+	}
+	// A kind that doesn't read is found by its title: there's nothing to ask.
+	if _, err := ws.Read("note", "records/notes/a/", "A", "a.txt", []byte("x")); err == nil || !strings.Contains(err.Error(), protocol.MethodRemoteRead) {
+		t.Errorf("a kind that doesn't read: %v", err)
+	}
+	if _, err := ws.Read("issue", "records/issues/a/", "A", "a.txt", []byte("x")); err == nil {
+		t.Error("a kind it hasn't was read")
+	}
+
+	// A ws from before remotes says so.
+	if _, err := sketch.Remotes(ctx); !errors.Is(err, plugin.ErrUnsupported) {
+		t.Errorf("a ws from before remotes: %v", err)
+	}
+
+	// The plugin asks ws which there are, and for one's file.
+	flow := protocol.RemoteOpened{
+		RemoteThing: protocol.RemoteThing{Kind: "sketch", Name: "records/sketches/release-flow/", Repo: "records", Path: "sketches/release-flow/", Title: "Release flow", Main: "release-flow.excalidraw", Picture: "release-flow.svg", Version: "3f9c2a"},
+		Content:     []byte("boxes"),
+	}
+	arch := protocol.RemoteOpened{RemoteThing: protocol.RemoteThing{Kind: "sketch", Name: "records/sketches/arch/", Repo: "records", Path: "sketches/arch/", Title: "Architecture", Main: "arch.excalidraw", Version: "77aa01"}}
+	ws.Remotes(flow, arch, protocol.RemoteOpened{RemoteThing: protocol.RemoteThing{Kind: "note", Name: "records/notes/a/", Title: "A"}})
+	things, err := sketch.Remotes(ctx)
+	if err != nil || len(things) != 2 || things[0].Name != arch.Name || things[1] != flow.RemoteThing {
+		t.Errorf("the sketches in repos: %+v, %v", things, err)
+	}
+	thing, content, err := sketch.OpenRemote(ctx, flow.Name)
+	if err != nil || thing != flow.RemoteThing || string(content) != "boxes" {
+		t.Errorf("opened: %+v %q, %v", thing, content, err)
+	}
+	if _, _, err := sketch.OpenRemote(ctx, "records/sketches/gone/"); !errors.Is(err, plugin.ErrNotFound) {
+		t.Errorf("one that isn't there: %v", err)
+	}
+}
+
+// ws puts one of the plugin's things in a repo, and saves it there, when
+// the plugin asks for the person: ws asks the plugin for the thing, names
+// its folder, and tells the plugin where it is. Where it's changed there
+// since the plugin last had it, the plugin's given what's there, to
+// bring the two together.
+func TestAThingIsPromotedAndSaved(t *testing.T) {
+	type local struct{ title, scene, remote, base string }
+	things := map[string]*local{"sketch-12": {title: "Release  flow!", scene: "boxes"}, "sketch-13": {title: "Architecture", scene: "layers"}, "sketch-14": {scene: "untitled"}}
+	var exports []string
+	var sketch *plugin.Ref
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		sketch = p.Ref("sketch", "Sketch").Prefix("sketch-").Fields(plugin.Title("title")).
+			Remote(plugin.Remote{
+				Path: "sketches/{slug}/", Main: "{slug}.excalidraw",
+				Export: func(_ context.Context, e plugin.Exporting) (plugin.Exported, error) {
+					l, ok := things[e.Name]
+					if !ok {
+						return plugin.Exported{}, plugin.ErrNotFound
+					}
+					exports = append(exports, e.Name)
+					if e.Current != nil { // changed there since: its own merge
+						exports[len(exports)-1] += " with " + string(e.Content)
+						l.scene, l.base = l.scene+" + "+string(e.Content), e.Current.Version
+					}
+					return plugin.Exported{Remote: l.remote, Base: l.base, Package: plugin.Package{Title: l.title, Main: []byte(l.scene),
+						Files: []plugin.PackageFile{{Name: "{slug}.svg", Content: []byte("<svg>" + l.scene + "</svg>"), Picture: true}}}}, nil
+				},
+				Saved: func(_ context.Context, name string, thing plugin.RemoteThing) error {
+					things[name].remote, things[name].base = thing.Name, thing.Version
+					return nil
+				},
+			})
+		p.Ref("note", "Note").Prefix("note-").Fields(plugin.Title("title")).Remote(plugin.Remote{Path: "notes/{slug}/", Main: "{slug}.txt"})
+	})
+	ctx := context.Background()
+	if r := ws.Registration().Refs; !r[0].Remote.Exports || r[1].Remote.Exports {
+		t.Fatalf("which kinds export, as registered: %+v %+v", r[0].Remote, r[1].Remote)
+	}
+
+	// A ws from before it says so.
+	if _, err := sketch.Promote(ctx, "sketch-12"); !errors.Is(err, plugin.ErrUnsupported) {
+		t.Fatalf("a ws from before promoting: %v", err)
+	}
+	inRepos := ws.Remotes()
+
+	// Promoted: ws names its folder from its title, its files after it,
+	// and tells the plugin where it is.
+	done, err := sketch.Promote(ctx, "sketch-12")
+	if err != nil || !done.Changed || done.Capsule != "" {
+		t.Fatalf("promoted: %+v, %v", done, err)
+	}
+	flow := done.Thing
+	if flow.Name != "records/sketches/release-flow/" || flow.Title != "Release flow!" || flow.Main != "release-flow.excalidraw" || flow.Picture != "release-flow.svg" || flow.Version == "" {
+		t.Fatalf("the thing, promoted: %+v", flow)
+	}
+	if got := inRepos(); len(got) != 1 || got[0].From != "sketch-12" || string(got[0].Content) != "boxes" || string(got[0].Package.Files[0].Content) != "<svg>boxes</svg>" {
+		t.Fatalf("in the repos: %+v", got)
+	}
+	if l := things["sketch-12"]; l.remote != flow.Name || l.base != flow.Version {
+		t.Fatalf("what the plugin was told: %+v", l)
+	}
+	// It lives there now: it's saved, not promoted again.
+	if _, err := sketch.Promote(ctx, "sketch-12"); err == nil || !strings.Contains(err.Error(), "lives at records/sketches/release-flow/ already") {
+		t.Errorf("promoted twice: %v", err)
+	}
+	// One put where the person said is named after that folder; one the
+	// plugin hasn't, one with no title, and one not in a repo are said.
+	if there, err := sketch.Promote(ctx, "sketch-13", plugin.PromoteTo("docs:design/arch/")); err != nil || there.Thing.Name != "docs/design/arch/" || there.Thing.Main != "arch.excalidraw" {
+		t.Errorf("one put where the person said: %+v, %v", there.Thing, err)
+	}
+	if _, err := sketch.Promote(ctx, "sketch-99"); !errors.Is(err, plugin.ErrNotFound) {
+		t.Errorf("one the plugin hasn't: %v", err)
+	}
+	if _, err := sketch.Promote(ctx, "sketch-14"); err == nil || !strings.Contains(err.Error(), "it has no title") {
+		t.Errorf("one with no title: %v", err)
+	}
+	if _, err := sketch.SaveRemote(ctx, "sketch-14"); err == nil || !strings.Contains(err.Error(), "isn't in a repo: promote it first") {
+		t.Errorf("one that isn't in a repo, saved: %v", err)
+	}
+
+	// Saved as it is: nothing changes. Saved once it's drawn on: there
+	// now, at another version, which the plugin's told.
+	if same, err := sketch.SaveRemote(ctx, "sketch-12"); err != nil || same.Changed || same.Merged {
+		t.Errorf("saved as it was: %+v, %v", same, err)
+	}
+	things["sketch-12"].scene, things["sketch-12"].title = "boxes and arrows", "Release flow"
+	saved, err := sketch.SaveRemote(ctx, "sketch-12")
+	if err != nil || !saved.Changed || saved.Merged || saved.Thing.Version == flow.Version || saved.Thing.Title != "Release flow" || saved.Thing.Name != flow.Name {
+		t.Fatalf("saved: %+v, %v", saved, err)
+	}
+	if things["sketch-12"].base != saved.Thing.Version {
+		t.Errorf("the plugin wasn't told what it saved at")
+	}
+
+	// Someone else saves it meanwhile: the plugin's asked again, with
+	// what's there, and what it gives then is what's saved.
+	theirs := inRepos()[1].RemoteOpened
+	theirs.Content, theirs.Version = []byte("their circles"), "0123456789abcdef"
+	inRepos = ws.Remotes(theirs)
+	things["sketch-12"].scene = "my triangles"
+	exports = nil
+	merged, err := sketch.SaveRemote(ctx, "sketch-12")
+	if err != nil || !merged.Changed || !merged.Merged {
+		t.Fatalf("saved over a change there: %+v, %v", merged, err)
+	}
+	if want := []string{"sketch-12", "sketch-12 with their circles"}; fmt.Sprint(exports) != fmt.Sprint(want) {
+		t.Errorf("the plugin was asked %q, want %q", exports, want)
+	}
+	if got := inRepos(); len(got) != 1 || string(got[0].Content) != "my triangles + their circles" {
+		t.Errorf("what's there after: %+v", got)
+	}
+}

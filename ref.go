@@ -29,6 +29,10 @@ type Ref struct {
 	ref  protocol.Ref
 	show func(ctx context.Context, a Asked) (Thing, error)
 	acts map[string]func(*Act) error // what does each of its Actions
+	read func(ctx context.Context, f RemoteFile) (map[string]string, error)
+	// Its things in a repo: giving one to ws, and hearing it's there.
+	export func(ctx context.Context, e Exporting) (Exported, error)
+	saved  func(ctx context.Context, name string, thing RemoteThing) error
 }
 
 // Asked is one thing ws asks about, by the name it was written as.
@@ -240,6 +244,279 @@ func (r *Ref) Action(id, title string, fn func(a *Act) error) *Ref {
 func (r *Ref) Show(fn func(ctx context.Context, a Asked) (Thing, error)) *Ref {
 	r.show = fn
 	return r
+}
+
+// Remote is where a kind's things live beyond this machine, as Ref.Remote
+// takes it: a folder of a repo each (its package), for everyone with the
+// repo. The folder holds the thing's own file (its main file), a
+// thing.toml that says what it is, and what the plugin makes from the
+// main file. ws finds the packages in the workspace's repos, names each
+// thing by its folder (records/sketches/release-flow/) and calls it what
+// its thing.toml says. The plugin mints no name for one and needn't keep
+// one: Remotes and OpenRemote ask ws.
+type Remote struct {
+	// Path is the folder a new one goes in, in its repo, with {slug}
+	// where the thing's slug goes: sketches/{slug}/. One that's there is
+	// found wherever its folder is.
+	Path string
+	// Main is the main file's name in that folder: {slug}.excalidraw.
+	Main string
+	// Read says what a main file is found by: a value for each of the
+	// kind's fields that the file has one for (the words on a sketch). Its
+	// title is its thing.toml's. ws asks once for each version of a file,
+	// so what's said is of the file alone. Without Read, one is found by
+	// its title.
+	Read func(ctx context.Context, f RemoteFile) (map[string]string, error)
+	// Export gives one of the plugin's own things as its folder in a repo
+	// is to hold it: ws asks when the person promotes it, or saves it. It
+	// says where the thing lives, if it's in a repo already, and the
+	// version there that what it gives was made from. Where the thing has
+	// changed in its repo since that version, ws asks again with what's
+	// there now (Exporting.Current): the plugin brings that into what it
+	// has, however its kind merges, and gives the two together. Without
+	// Export, ws puts none of the kind's things in a repo.
+	Export func(ctx context.Context, e Exporting) (Exported, error)
+	// Saved is told that one of the plugin's things is in its repo, as it
+	// was last exported: name is the plugin's own for it, and thing what's
+	// there, whose Version is what the next export is made from.
+	Saved func(ctx context.Context, name string, thing RemoteThing) error
+}
+
+// Exporting is one of the plugin's own things ws asks for, to put it in a
+// repo.
+type Exporting struct {
+	// Name is the plugin's name for it: sketch-12.
+	Name string
+	// Current is the thing as it is in its repo now, and Content its main
+	// file there, where that's changed since the plugin last had it: nil
+	// where it hasn't, and for one that isn't in a repo.
+	Current *RemoteThing
+	Content []byte
+}
+
+// Exported is a thing as Export gives it.
+type Exported struct {
+	// Remote is its name in its repo (a RemoteThing's Name), where it's in
+	// one already: "" for one that isn't.
+	Remote string
+	// Base is the version there that the package was made from: the
+	// RemoteThing's Version, as the plugin last had it. "" for one that
+	// isn't in a repo.
+	Base string
+	Package
+}
+
+// RemoteFile is a thing's main file, as ws read it from its repo.
+type RemoteFile struct {
+	// Name is the thing's name in ws: its folder.
+	Name string
+	// Title is what its thing.toml calls it.
+	Title string
+	// File is the main file's name, and Content what's in it.
+	File    string
+	Content []byte
+}
+
+// RemoteThing is one of a kind's things that lives in a repo, as ws
+// found it: its name, where it is, what it's called, its files' names,
+// and its version, which is its folder's.
+type RemoteThing = protocol.RemoteThing
+
+// Remote says this kind's things can live in a repo, and how: see Remote.
+// The kind needs a title field, which one in a repo has from its
+// thing.toml.
+//
+//	sketch = p.Ref("sketch", "Sketch").
+//		Prefix("sketch-").
+//		Fields(plugin.Title("title"), plugin.Markdown("text", "On it")).
+//		Remote(plugin.Remote{
+//			Path: "sketches/{slug}/",
+//			Main: "{slug}.excalidraw",
+//			Read: func(ctx context.Context, f plugin.RemoteFile) (map[string]string, error) {
+//				return map[string]string{"text": wordsOn(f.Content)}, nil
+//			},
+//		})
+func (r *Ref) Remote(remote Remote) *Ref {
+	r.ref.Remote = &protocol.Remote{Path: remote.Path, Main: remote.Main, Reads: remote.Read != nil, Exports: remote.Export != nil}
+	r.read, r.export, r.saved = remote.Read, remote.Export, remote.Saved
+	return r
+}
+
+// Remotes are the kind's things that live in the workspace's repos, as ws
+// found them, in order of name. A ws from before remotes is
+// ErrUnsupported.
+func (r *Ref) Remotes(ctx context.Context) ([]RemoteThing, error) {
+	var out protocol.RemoteListResult
+	if err := r.p.ask(ctx, protocol.MethodRemoteList, protocol.RemoteListParams{Kind: r.ref.Kind}, &out); err != nil {
+		return nil, err
+	}
+	return out.Things, nil
+}
+
+// OpenRemote is one of the kind's things that lives in a repo, by its
+// name, and its main file as it is on its repo's default branch. One ws
+// has nothing by that name for is ErrNotFound.
+func (r *Ref) OpenRemote(ctx context.Context, name string) (RemoteThing, []byte, error) {
+	var out protocol.RemoteOpened
+	if err := r.p.ask(ctx, protocol.MethodRemoteOpen, protocol.RemoteOpenParams{Kind: r.ref.Kind, Name: name}, &out); err != nil {
+		return RemoteThing{}, nil, err
+	}
+	return out.RemoteThing, out.Content, nil
+}
+
+// Package is a thing as its folder in a repo is to hold it: what it's
+// called, its main file, and what the plugin makes from the main file.
+type Package struct {
+	Title string
+	// Main is the main file's content.
+	Main []byte
+	// Files are what's made from it: a picture of it.
+	Files []PackageFile
+}
+
+// PackageFile is a file made from a thing's main file, by its name in
+// the folder, with {slug} where the thing's slug goes: {slug}.svg.
+// Picture: it's the thing's picture.
+type PackageFile = protocol.RemoteFile
+
+// RemoteSaved is what promoting or saving a thing did: the thing as it
+// is in its repo now, whether anything changed there, and the capsule it
+// was left in where its repo takes pull requests. See
+// protocol.RemoteSaved.
+type RemoteSaved = protocol.RemoteSaved
+
+func (pkg Package) wire() protocol.RemotePackage {
+	return protocol.RemotePackage{Title: pkg.Title, Main: pkg.Main, Files: pkg.Files}
+}
+
+// PromoteTo is the folder the person chose for a thing, as Promote takes
+// it (repo:folder/): none is where the kind's things go.
+type PromoteTo string
+
+// Promote has ws put one of the plugin's own things in a repo, for the
+// person who asked the plugin to: name is the plugin's name for it. ws
+// asks for the thing (the kind's Export), names its folder from the
+// kind's Remote and the thing's title, writes it with a thing.toml,
+// commits it as the person and lands it as its repo lands, and tells the
+// plugin (the kind's Saved). What comes back says where it is now. A ws
+// from before it is ErrUnsupported.
+func (r *Ref) Promote(ctx context.Context, name string, to ...PromoteTo) (RemoteSaved, error) {
+	in := protocol.RemotePromoteParams{Kind: r.ref.Kind, Ref: name}
+	for _, t := range to {
+		in.To = string(t)
+	}
+	var out RemoteSaved
+	err := r.p.ask(ctx, protocol.MethodRemotePromote, in, &out)
+	return out, err
+}
+
+// SaveRemote has ws save one of the plugin's own things that's in a repo,
+// as the person has it now: name is the plugin's name for it. ws asks
+// for the thing, and where it's changed in its repo since, asks again
+// with what's there, for the plugin to bring the two together. One the
+// plugin says isn't in a repo is refused.
+func (r *Ref) SaveRemote(ctx context.Context, name string) (RemoteSaved, error) {
+	var out RemoteSaved
+	err := r.p.ask(ctx, protocol.MethodRemoteSave, protocol.RemoteSaveParams{Kind: r.ref.Kind, Ref: name}, &out)
+	return out, err
+}
+
+// remoteRef is the ref of that kind, for one of ws's requests about its
+// things in a repo.
+func (p *Plugin) remoteRef(kind string) (*Ref, error) {
+	for _, r := range p.refs {
+		if r.ref.Kind == kind {
+			return r, nil
+		}
+	}
+	return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: fmt.Sprintf("this plugin has no ref called %q", kind)}
+}
+
+// exportRemote answers ws asking for one of the plugin's things as its
+// folder in a repo is to hold it.
+func (p *Plugin) exportRemote(ctx context.Context, in protocol.RemoteExportParams) (any, error) {
+	ref, err := p.remoteRef(in.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if ref.export == nil {
+		return nil, rpc.MethodNotFound(protocol.MethodRemoteExport)
+	}
+	if p.broken != nil {
+		return nil, p.broken
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.CommandTimeout)
+	defer cancel()
+	asked := Exporting{Name: in.Ref}
+	if in.Current != nil {
+		asked.Current, asked.Content = &in.Current.RemoteThing, in.Current.Content
+	}
+	var out Exported
+	err = p.recovering("exporting "+in.Ref, func() (err error) {
+		out, err = ref.export(ctx, asked)
+		return err
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("there's no %s %s", in.Kind, in.Ref)}
+	case err != nil:
+		return nil, err
+	}
+	return protocol.RemoteExported{Name: out.Remote, Base: out.Base, RemotePackage: out.Package.wire()}, nil
+}
+
+// savedRemote hears from ws that one of the plugin's things is in a repo.
+func (p *Plugin) savedRemote(ctx context.Context, in protocol.RemoteSavedParams) (any, error) {
+	ref, err := p.remoteRef(in.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if ref.saved == nil {
+		return struct{}{}, nil // nothing it keeps of it
+	}
+	if p.broken != nil {
+		return nil, p.broken
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.CommandTimeout)
+	defer cancel()
+	err = p.recovering("hearing "+in.Ref+" is saved", func() error { return ref.saved(ctx, in.Ref, in.Thing) })
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, nil
+}
+
+// readRemote answers ws asking what a main file is found by.
+func (p *Plugin) readRemote(ctx context.Context, in protocol.RemoteReadParams) (any, error) {
+	var ref *Ref
+	for _, r := range p.refs {
+		if r.ref.Kind == in.Kind {
+			ref = r
+		}
+	}
+	if ref == nil {
+		return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: fmt.Sprintf("this plugin has no ref called %q", in.Kind)}
+	}
+	if ref.read == nil {
+		return nil, rpc.MethodNotFound(protocol.MethodRemoteRead)
+	}
+	if p.broken != nil {
+		return nil, p.broken
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.CommandTimeout)
+	defer cancel()
+	var fields map[string]string
+	err := p.recovering("reading "+in.Name, func() (err error) {
+		fields, err = ref.read(ctx, RemoteFile{Name: in.Name, Title: in.Title, File: in.File, Content: in.Content})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	return protocol.RemoteReadResult{Fields: fields}, nil
 }
 
 // refsDeclared are the refs as ws is told them, and what's wrong with

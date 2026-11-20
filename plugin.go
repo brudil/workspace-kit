@@ -346,6 +346,45 @@ func (p *Plugin) handle(ctx context.Context, method string, params json.RawMessa
 		p.running.Add(1)
 		defer p.running.Done()
 		return p.showRef(ctx, in)
+	case protocol.MethodRemoteRead:
+		var in protocol.RemoteReadParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		return p.readRemote(ctx, in)
+	case protocol.MethodRemoteExport:
+		var in protocol.RemoteExportParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		return p.exportRemote(ctx, in)
+	case protocol.MethodRemoteSaved:
+		var in protocol.RemoteSavedParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		select {
+		case <-p.initialized:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		p.running.Add(1)
+		defer p.running.Done()
+		return p.savedRemote(ctx, in)
 	case protocol.MethodActionRun:
 		var in protocol.ActionRunParams
 		if err := json.Unmarshal(params, &in); err != nil {
