@@ -3,6 +3,13 @@
 // What the plugin's endpoints take and answer: the types, and in Api, which
 // endpoint has which. To change it, change the Go and run `go tool apigen`.
 
+// From main/main.go
+/**
+ * Aged is how long an item's been held. Its constants aren't exported,
+ * and it's the union of them all the same.
+ */
+export type Aged = "new" | "old" | "vintage";
+
 // From stock/stock.go
 /**
  * Entry is what's held of something.
@@ -40,6 +47,7 @@ export interface Item extends Entry {
      */
     kind: Kind;
     state: State;
+    aged: Aged;
     tags: string[];
     notes?: Note[];
     /**

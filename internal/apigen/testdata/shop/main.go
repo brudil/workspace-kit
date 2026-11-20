@@ -20,6 +20,7 @@ type Item struct {
 	// Kind is what sort of thing it is.
 	Kind  stock.Kind `json:"kind"`
 	State State      `json:"state"`
+	Aged  Aged       `json:"aged"`
 	Tags  []string   `json:"tags"`
 	Notes []Note     `json:"notes,omitempty"`
 	// Parent is what it's part of, if anything.
@@ -39,6 +40,17 @@ type State string
 const (
 	InStock State = "in stock"
 	SoldOut State = "sold out"
+)
+
+// Aged is how long an item's been held. Its constants aren't exported,
+// and it's the union of them all the same.
+type Aged string
+
+const (
+	agedNew Aged = "new"
+	agedOld Aged = "old"
+	// Vintage is exported, and is one of them with the rest.
+	Vintage Aged = "vintage"
 )
 
 // Note is something said of an item.
