@@ -3,12 +3,9 @@
 // for its greeting, and renders into #root.
 
 import { type Client, connect } from "@withworkspace/ui-lib";
-
-// What the plugin answers, at /api/hello and /api/visits (main.go).
-interface Hello {
-  greeting: string;
-  visits: number;
-}
+// What the plugin answers at /api/hello and /api/visits, written from its
+// Go (main.go) by `go tool apigen`.
+import type { Hello } from "./api.gen";
 
 async function main() {
   let ws: Client;

@@ -102,8 +102,10 @@ type route struct {
 }
 
 // Handle declares something the plugin's HTTP answers, as net/http would
-// (pattern is ServeMux's: "GET /api/issues/{key}"). It's the app's API:
-// the app fetches ws.api("/api/issues") for a handler at /api/issues.
+// (pattern is ServeMux's: "GET /api/export"): the app fetches
+// ws.api("/api/export") for a handler at /api/export. It's for what isn't
+// JSON both ways (a file, a stream, a webhook). What the app asks and is
+// answered as JSON is an endpoint (Get, Post), which says its types.
 //
 // A handler that panics answers 500, and the panic is logged. While the
 // plugin's database couldn't be brought up, every handler answers 503

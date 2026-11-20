@@ -11,7 +11,6 @@ package main
 
 import (
 	"embed"
-	"encoding/json"
 	"net/http"
 
 	"github.com/withworkspace/plugin"
@@ -20,6 +19,11 @@ import (
 //go:embed agents.md migrations ui/dist
 var files embed.FS
 
+// Hello is what the app is sent.
+type Hello struct {
+	Greeting string `json:"greeting"`
+}
+
 func main() {
 	p := plugin.New(files)
 
@@ -27,8 +31,8 @@ func main() {
 
 	p.UI("ui/dist")
 	p.View("Hello", plugin.Icon("sparkle"))
-	p.HandleFunc("GET /api/hello", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"greeting": greeting.Get()})
+	plugin.Get(p, "/api/hello", func(r *http.Request) (Hello, error) {
+		return Hello{Greeting: greeting.Get()}, nil
 	})
 
 	p.Command("say", "Says the greeting", func(c *plugin.Call) error {
@@ -50,16 +54,18 @@ A plugin's web UI is one client-side app, and ws serves the page it runs in. The
 - **A view** is an entry in ws's sidebar that opens the app at a path: `p.View("Board", plugin.At("/board"))`.
 - **ws keeps the history.** The app shows the screen at the path ws says it's at (`ws.path`, then `ws.onNavigate`), and moves by asking: a link to `ws.href("/board")`, or `ws.go("/board")`. Back, forward and ⌘-click all work as they do on ws's own pages.
 - **The app talks to ws** with [`@withworkspace/ui-lib`](https://www.npmjs.com/package/@withworkspace/ui-lib): where it is, its title, the theme, and when what it shows is stale. How they talk is the frame protocol, in [`ui-lib`'s `PROTOCOL.md`](https://github.com/withworkspace/ui-lib/blob/main/PROTOCOL.md).
-- **The app talks to the plugin** over the plugin's own HTTP: `p.Handle("GET /api/issues", …)` here is `fetch(ws.api("/api/issues"))` there. `p.Changed()` tells the open app to ask again.
+- **The app talks to the plugin** through the plugin's endpoints: `plugin.Get(p, "/api/issues", …)` here is `plugin.get("/api/issues")` there, with the types the Go says ([What the app asks the plugin](#what-the-app-asks-the-plugin)). `p.Changed()` tells the open app to ask again.
 
 ```ts
-import { connect } from "@withworkspace/ui-lib";
+import { connect, endpoints } from "@withworkspace/ui-lib";
+import type { Api } from "./api.gen";
 
 const ws = await connect();
+const plugin = endpoints<Api>(ws);
 ws.setTitle("Hello");
 
 async function show() {
-  const { greeting } = await fetch(ws.api("/api/hello")).then((r) => r.json());
+  const { greeting } = await plugin.get("/api/hello");
   ws.root.textContent = `${greeting}, workspace`;
 }
 ws.onChanged(show);
@@ -98,7 +104,11 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `p.Config.Table` | A config key holding named rows (`[plugin.jira.queries.bugs]`), each with the fields declared with the table's own `String`, `Bool`, `Map`… and read with what each returned: `for _, row := range queries.Rows() { label.In(row) }`. Rows come in the order they were written, the team's with yours laid over them, each checked by ws against the fields. A field may be a table itself (`Table`, read with `RowsIn(row)`), one level down. |
 | `p.UI` | The plugin's app: a folder of its built files, with `app.js` and, if it has one, `app.css`. It's served at `/ui/`, and registered with a hash of each file, so a browser asks again when it's built again. |
 | `p.View`, with `plugin.Icon`, `Under`, `At` | An entry in ws's sidebar, which opens the app at a path. |
-| `p.Handle`, `p.HandleFunc` | What the app asks the plugin, as `net/http` takes it: `"GET /api/issues/{key}"`. A path nothing handles is a plain 404. |
+| `plugin.Get`, `Post`, `Put`, `Patch`, `Delete` | An endpoint: what the app asks the plugin, declared with the Go types it takes and answers, sent as JSON ([What the app asks the plugin](#what-the-app-asks-the-plugin)). They're functions, not methods, because Go gives a method no types of its own. |
+| `plugin.Query` | Given to `Get` or `Delete` round the endpoint's function, it says the query the endpoint is asked with (what's after the `?`), as a struct the function is given: `plugin.Query(func(r *http.Request, q Since) (History, error) { … })`. |
+| `plugin.Status` | An error as an endpoint answers it, with that HTTP status and not 500. An error type of the plugin's says its own with a method `HTTPStatus() int`. |
+| `go tool apigen` | Writes `ui/src/api.gen.ts` from the endpoints: their types in TypeScript, and `Api`, which the app's client is given. `-check` fails if the file isn't what the Go says. |
+| `p.Handle`, `p.HandleFunc` | Anything else the plugin's HTTP answers, as `net/http` takes it: `"GET /api/export"`. A path nothing handles is a plain 404. |
 | `p.Command` | `ws <plugin> <name>`. Return data and it's printed as a table for a person, JSON for `-f json`, markdown for `-f llm`. |
 | `.Conversations()` | On a command: a conversation's agent may run it itself, not only propose. For what's fine changed as the user watches (a drawing they can undo) and for reads; what acts for the user outside ws is a proposal. |
 | `c.Stdin`, `c.Piped` | What's piped to a command (`ws <plugin> <name> < ops.json`), or the person typing. Read from ws as the command reads it; not `os.Stdin`, which is the plugin's connection. |
@@ -121,7 +131,91 @@ Declaring a thing and handling it are one call, and what ws is told the plugin a
 | `.Show` | One thing, as it is now: for one ws wasn't told of, and for `ws show RAM-123`. `ErrNotFound` for a name the plugin has nothing by. |
 | `p.WS`, `p.WSCommand` | Running one of ws's own commands in the workspace: `p.WS(ctx, "show", "m12", "-f", "llm")`. For what ws doesn't answer by asking yet. |
 | `.Timeout` on a command | How long it may run, where two minutes isn't it. `Timeout(0)` is until it's stopped. |
-| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it. `plugintest.Row(…)` is a row of a config table, `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Conversations()` has it start the conversations asked for and says what each was started with, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
+| `plugintest` | Runs the plugin inside a test, against a stand-in for ws: its commands, its config, and its HTTP as its app would ask it (`ws.Get(path)`, and `ws.Send(method, path, body)` for an endpoint that takes a body). `plugintest.Row(…)` is a row of a config table, `ws.Missions(…)`, `ws.Repos(…)` and `ws.Shows(…)` give the stand-in what it answers, `ws.Conversations()` has it start the conversations asked for and says what each was started with, `ws.Show(kind, name, full)` asks the plugin what one of its things is, `ws.Things(kind)` is what it's told ws of, `ws.Act` and `ws.ActOn` run its actions with what's been answered, and `ws.Look(…)` says who's looking. |
+
+## What the app asks the plugin
+
+An endpoint is declared with what it takes and what it answers, as Go types:
+
+```go
+// Issue is one issue, as the app shows it.
+type Issue struct {
+	Key      string    `json:"key"`
+	Summary  string    `json:"summary"`
+	Comments []Comment `json:"comments"`
+}
+
+// NewComment is what's sent to say something on an issue.
+type NewComment struct {
+	Text string `json:"text"`
+}
+
+plugin.Get(p, "/api/issues/{key}", func(r *http.Request) (Issue, error) {
+	return find(r.Context(), r.PathValue("key"))
+})
+plugin.Post(p, "/api/issues/{key}/comment", func(r *http.Request, in NewComment) (Issue, error) {
+	return comment(r.Context(), r.PathValue("key"), in.Text)
+})
+```
+
+The framework reads the body as what's taken and sends what's answered, as JSON. An error is answered as its text: with 500, with 404 for `plugin.ErrNotFound`, or with the status it's given (`plugin.Status(http.StatusConflict, err)`). The request is the function's for the rest: `r.PathValue`, `r.Context()`.
+
+An endpoint that's read with a query (what's after the `?`) says the query's type too, by being given `plugin.Query`:
+
+```go
+// Since is which of the history is asked for.
+type Since struct {
+	Key   string `json:"key,omitempty"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+plugin.Get(p, "/api/history", plugin.Query(func(r *http.Request, q Since) (History, error) {
+	return history(r.Context(), q.Key, q.Limit)
+}))
+```
+
+`go tool apigen` reads those declarations and writes `ui/src/api.gen.ts` for the app: the types, in TypeScript, and `Api`, which says which endpoint takes and answers which.
+
+```ts
+export interface Api {
+    "GET /api/history": { query: Since; out: History };
+    "GET /api/issues/{key}": { params: { key: string }; out: Issue };
+    "POST /api/issues/{key}/comment": { params: { key: string }; in: NewComment; out: Issue };
+}
+```
+
+The app asks through [`@withworkspace/ui-lib`'s `endpoints`](https://github.com/withworkspace/ui-lib#asking-the-plugin), given `Api`:
+
+```ts
+const plugin = endpoints<Api>(ws);
+const issue = await plugin.get("/api/issues/{key}", { params: { key } });  // an Issue
+await plugin.post("/api/issues/{key}/comment", { params: { key }, body: { text } });
+const recent = await plugin.get("/api/history", { query: { limit: 300 } });
+```
+
+So neither side keeps the other's types by hand. Change the Go, run `go tool apigen`, and `tsc` says what in the app has to follow: a field that's gone, a path that moved, a body that takes something new, a query's name that changed.
+
+It's a tool of the plugin's module, so it's the framework's own version of itself:
+
+```bash
+go get -tool github.com/withworkspace/plugin/cmd/apigen   # once: a new plugin from plugin-dev has it
+go tool apigen                                            # write ui/src/api.gen.ts
+go tool apigen -check                                     # fail if it isn't what the Go says: for CI
+```
+
+`ui/src/api.gen.ts` is committed. `ws plugin-dev watch` writes it again on each save of the Go.
+
+What holds for an endpoint:
+
+- **Its types are exported, and have names.** What an endpoint takes or answers is a type with a name (`Issue`), a slice, map or pointer of one, or a plain value. Every type it's made of is exported too, in whichever of the plugin's packages it lives: apigen says which isn't. Only those types are written, not the rest of what the plugin exports.
+- **`struct{}` is nothing.** An endpoint that takes it is sent no body, and one that answers it answers 204: `func(r *http.Request, _ struct{}) (struct{}, error)`.
+- **It's declared where it's called**, with its path as a constant. apigen reads the source, and can't see through a function of the plugin's own that declares for it.
+- **Names are the Go's.** `board.Person` is `Person` in the app. Where two packages have a type of one name, the types of each but the plugin's main get their package's name in front: `BoardPerson`.
+- **What a type says is what's sent.** A named string type with constants is the union of them (`"open" | "done"`). `time.Time` is a string. A type with a `MarshalJSON` of its own is `unknown`, and one with a `MarshalText` a string. A field marked `omitempty` is optional. A pointer is `| null`.
+- **Fill a list inside a struct.** A nil slice or map an endpoint answers with is sent as `[]` or `{}`, as its type says. One in a field is sent as `null` (Go's JSON), though its type says a list: make it empty, or mark it `omitempty`.
+- **A query is a struct of plain values.** Each field of a query's type is a string, a number, a bool, a type that reads itself from text (`time.Time`), a pointer to one, or a slice of them, which is the name given more than once (`?label=a&label=b`). A field goes by its json name, and one marked `omitempty` may be left out by the app. A name that isn't sent leaves its field empty, and a value that can't be read as its field (`?limit=lots`) is a 400 that says which. An endpoint declared without `plugin.Query` is asked with no query. `Get` and `Delete` take one: what's sent with a body goes in the body.
+
+Anything that isn't JSON both ways (a file, a stream, a webhook) is a handler, as `net/http` takes it: `p.Handle("GET /api/export", …)`, fetched at `ws.api("/api/export")`.
 
 ## A plugin's folder
 
@@ -136,7 +230,14 @@ plugin-hello/
     package.json       the app: @withworkspace/ui-lib, and what builds it
     src/main.ts
     src/app.css
+    src/api.gen.ts     what the endpoints take and answer, written by go tool apigen: committed
     dist/              the app as built (app.js, app.css): committed, and served at /ui/
+```
+
+After a change to an endpoint or a type it sends, write the app's types again, and commit `ui/src/api.gen.ts` with the change:
+
+```bash
+go tool apigen
 ```
 
 After a change to the app, build it and commit `ui/dist/` with the change:
@@ -161,7 +262,7 @@ prints what the plugin would tell ws it adds. In a workspace:
 ws plugin add --link /path/to/plugin/examples/hello
 ```
 
-`just ui` builds the example's app again, and `just ui-check` fails if what's committed in `examples/hello/ui/dist/` isn't what its source builds.
+`just ui` builds the example's app again, and `just ui-check` fails if what's committed in `examples/hello/ui/dist/` isn't what its source builds. `just api` writes the example's `ui/src/api.gen.ts` again from its Go, and `just check` fails if it isn't what the Go says.
 
 ## Moving a plugin from before v0.2.0
 
@@ -169,8 +270,8 @@ Before v0.2.0 the framework rendered a plugin's pages: Go templates in `views/`,
 
 | Gone | In its place |
 |---|---|
-| `v.Page`, the templates in `views/`, and the template functions `url`, `reltime` and `pill` | The app renders. What a page's function returned is a JSON endpoint: `p.Handle`. |
-| `v.Post`, and the redirect back | A handler the app posts to with `fetch`. |
+| `v.Page`, the templates in `views/`, and the template functions `url`, `reltime` and `pill` | The app renders. What a page's function returned is an endpoint: `plugin.Get`. |
+| `v.Post`, and the redirect back | An endpoint the app posts to: `plugin.Post`. |
 | `v.Handle` | `p.Handle`: the same, on the plugin. |
 | `p.View(title, func(v *plugin.View) { … })` | `p.View(title, options…)`, and `plugin.At(path)` where the entry doesn't open at `/`. |
 | `plugin.Request` | `*http.Request`. |
