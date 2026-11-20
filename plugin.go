@@ -539,7 +539,13 @@ func (p *Plugin) registration() protocol.Registration {
 	if len(p.commands) > 0 {
 		cmds := &protocol.Commands{Name: p.info.Plugin.Name, Short: p.description}
 		for _, c := range p.commands {
-			cmds.Subcommands = append(cmds.Subcommands, protocol.Subcommand{Name: c.name, Short: c.short, Args: c.usage(), Conversations: c.conversations})
+			sub := protocol.Subcommand{Name: c.name, Short: c.short, Args: c.usage(), Conversations: c.conversations, Label: c.label}
+			for _, f := range c.flags {
+				if f.takesValue {
+					sub.Options = append(sub.Options, f.name)
+				}
+			}
+			cmds.Subcommands = append(cmds.Subcommands, sub)
 		}
 		reg.Commands = cmds
 	}

@@ -221,6 +221,16 @@ type Subcommand struct {
 	// An addition to version 1: a ws from before it runs none of a
 	// plugin's commands in a conversation.
 	Conversations bool `json:"conversations,omitempty"`
+	// Label is what the command is doing, as a conversation shows an
+	// agent's step that ran it: "Pulling up {1}". {1} is its first
+	// argument, {2} its second, and so on. An addition to version 1: a ws
+	// from before it shows the command as it was typed.
+	Label string `json:"label,omitempty"`
+	// Options are the flags it takes that have a value (--name value),
+	// without their dashes: how ws tells an option's value from an
+	// argument, reading a command an agent ran. -f and --format are
+	// every command's, and not listed. An addition to version 1.
+	Options []string `json:"options,omitempty"`
 }
 
 // Agent is what agents are told of the plugin. No roles means every role.

@@ -652,6 +652,24 @@ func TestACommandMarkedForConversationsIsRegisteredSo(t *testing.T) {
 	}
 }
 
+func TestACommandsLabelAndOptionsAreRegistered(t *testing.T) {
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		p.Command("show", "", func(*plugin.Call) error { return nil }).Label("Pulling up {1}").Option("rev", "").Flag("all", "")
+		p.Command("post", "", func(*plugin.Call) error { return nil })
+	})
+	cmds := ws.Registration().Commands
+	if cmds == nil || len(cmds.Subcommands) != 2 {
+		t.Fatalf("commands: %+v", cmds)
+	}
+	show, post := cmds.Subcommands[0], cmds.Subcommands[1]
+	if show.Label != "Pulling up {1}" || len(show.Options) != 1 || show.Options[0] != "rev" {
+		t.Errorf("show: %+v", show)
+	}
+	if post.Label != "" || post.Options != nil {
+		t.Errorf("post: %+v", post)
+	}
+}
+
 func TestACommandOutOfTimeSaysSo(t *testing.T) {
 	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
 		p.CommandTimeout = 20 * time.Millisecond
