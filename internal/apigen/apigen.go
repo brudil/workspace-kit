@@ -1,0 +1,565 @@
+// Package apigen writes a plugin's app the TypeScript of what the plugin's
+// endpoints take and answer, from the plugin's Go: the types, and Api,
+// which says which endpoint has which.
+//
+// It reads the source. The endpoints are the calls of plugin.Get,
+// plugin.Post and the rest, each with its path as a constant and its
+// types as the call was made with them: what it takes and answers, and
+// for one given plugin.Query, the query it's asked with. The types are
+// those and whatever they're made of, written by guts
+// (github.com/coder/guts), and nothing else of the plugin's.
+package apigen
+
+import (
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/constant"
+	"go/token"
+	"go/types"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+
+	"golang.org/x/tools/go/packages"
+)
+
+// kit is the framework's package: the endpoints are calls of its
+// functions.
+const kit = "github.com/withworkspace/plugin"
+
+// methods are the framework's functions that declare an endpoint, and
+// whether each takes a body.
+var methods = map[string]struct {
+	method string
+	takes  bool
+}{
+	"Get":    {"GET", false},
+	"Delete": {"DELETE", false},
+	"Post":   {"POST", true},
+	"Put":    {"PUT", true},
+	"Patch":  {"PATCH", true},
+}
+
+// order is the order one path's endpoints are written in.
+var order = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+// written are types guts writes as something other than what they're made
+// of (config.StandardMappings, and json.RawMessage here), as Api writes
+// them where an endpoint takes or answers one itself.
+var written = map[string]string{
+	"time.Time":                       "string",
+	"time.Duration":                   "number",
+	"database/sql.NullTime":           "string | null",
+	"database/sql.NullString":         "string | null",
+	"database/sql.NullBool":           "boolean | null",
+	"database/sql.NullInt64":          "number | null",
+	"database/sql.NullInt32":          "number | null",
+	"database/sql.NullInt16":          "number | null",
+	"database/sql.NullFloat64":        "number | null",
+	"github.com/google/uuid.UUID":     "string",
+	"github.com/google/uuid.NullUUID": "string | null",
+	"net/netip.Addr":                  "string",
+	"net/url.URL":                     "string",
+	"regexp.Regexp":                   "string",
+	"encoding/json.RawMessage":        "unknown",
+}
+
+// Endpoint is one the plugin declares.
+type Endpoint struct {
+	Method string // GET
+	Path   string // /api/issues/{key}
+	// In and Out are what it takes and answers: nil for nothing.
+	In, Out types.Type
+	// Query is what it's asked with after the path's ?, for one declared
+	// with plugin.Query: nil for one asked with none.
+	Query types.Type
+	// At is where it's declared.
+	At token.Position
+}
+
+func (e Endpoint) String() string { return e.Method + " " + e.Path }
+
+// Generate is the TypeScript for the plugin in the folder the process is
+// in: every package of its module is read for endpoints.
+//
+// It reads the folder it's run in, not one it's given, because guts loads
+// packages from there.
+func Generate() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	pkgs, err := load()
+	if err != nil {
+		return "", err
+	}
+	// The folder as go names it, where it's reached through a link.
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	g := &generator{dir: dir, found: map[string]*types.TypeName{}, starts: map[string]bool{}, text: map[string]string{}}
+	for _, pkg := range pkgs {
+		g.fset = pkg.Fset
+		if len(pkg.GoFiles) > 0 {
+			in := filepath.Dir(pkg.GoFiles[0])
+			if real, err := filepath.EvalSymlinks(in); err == nil {
+				in = real
+			}
+			if in == dir {
+				g.root = pkg.Types
+			}
+		}
+		g.endpoints(pkg)
+	}
+	slices.SortFunc(g.all, func(a, b Endpoint) int {
+		if a.Path != b.Path {
+			return strings.Compare(a.Path, b.Path)
+		}
+		return slices.Index(order, a.Method) - slices.Index(order, b.Method)
+	})
+	for i, e := range g.all {
+		if i > 0 && g.all[i-1].String() == e.String() {
+			g.bad(e.At, "%s is declared twice: the other is at %s", e, g.rel(g.all[i-1].At))
+		}
+		if e.Query != nil {
+			g.query(e)
+		}
+		for _, t := range []types.Type{e.Query, e.In, e.Out} {
+			if t != nil {
+				g.reach(t, e, true)
+			}
+		}
+	}
+	if len(g.wrong) > 0 {
+		// In the order they're written in, whatever order they were found.
+		slices.SortStableFunc(g.wrong, func(a, b problem) int {
+			if a.at.Filename != b.at.Filename {
+				return strings.Compare(a.at.Filename, b.at.Filename)
+			}
+			if a.at.Line != b.at.Line {
+				return a.at.Line - b.at.Line
+			}
+			return a.at.Column - b.at.Column
+		})
+		lines := make([]string, len(g.wrong))
+		for i, p := range g.wrong {
+			lines[i] = p.text
+		}
+		return "", errors.New(strings.Join(lines, "\n"))
+	}
+	if err := g.name(); err != nil {
+		return "", err
+	}
+	typesTS, err := g.types()
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	b.WriteString("// Code generated by apigen (go tool apigen) from the plugin's Go. DO NOT EDIT.\n")
+	b.WriteString("//\n")
+	b.WriteString("// What the plugin's endpoints take and answer: the types, and in Api, which\n")
+	b.WriteString("// endpoint has which. To change it, change the Go and run `go tool apigen`.\n\n")
+	b.WriteString(typesTS)
+	b.WriteString("/**\n * What each of the plugin's endpoints takes and answers: params are its\n * path's, query is what's after the ?, in is the body it's sent, and out\n * is what it answers.\n */\n")
+	b.WriteString("export interface Api {\n")
+	for _, e := range g.all {
+		var parts []string
+		if params := wildcards(e.Path); len(params) > 0 {
+			for i, p := range params {
+				params[i] = p + ": string"
+			}
+			parts = append(parts, "params: { "+strings.Join(params, "; ")+" }")
+		}
+		if e.Query != nil {
+			parts = append(parts, "query: "+g.ts(e.Query))
+		}
+		if e.In != nil {
+			parts = append(parts, "in: "+g.ts(e.In))
+		}
+		out := "void"
+		if e.Out != nil {
+			out = g.ts(e.Out)
+		}
+		parts = append(parts, "out: "+out)
+		fmt.Fprintf(&b, "    %q: { %s };\n", e.String(), strings.Join(parts, "; "))
+	}
+	b.WriteString("}\n")
+	return b.String(), nil
+}
+
+// load reads the module's packages: their source, and the types of what
+// they use.
+func load() ([]*packages.Package, error) {
+	pkgs, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax,
+	}, "./...")
+	if err != nil {
+		return nil, err
+	}
+	var wrong []string
+	for _, pkg := range pkgs {
+		for _, e := range pkg.Errors {
+			// Files to embed that aren't there yet (an app that hasn't
+			// been built into ui/dist) say nothing of the plugin's types:
+			// the app's types can be written before the app is built.
+			if strings.Contains(e.Msg, "no matching files found") {
+				continue
+			}
+			wrong = append(wrong, e.Error())
+		}
+	}
+	if len(wrong) > 0 {
+		return nil, fmt.Errorf("the plugin doesn't build:\n%s", strings.Join(wrong, "\n"))
+	}
+	return pkgs, nil
+}
+
+type generator struct {
+	dir  string
+	fset *token.FileSet
+	root *types.Package // the package in the folder itself: the plugin's main
+	all  []Endpoint
+
+	// found are the types with names that the endpoints take, answer, or
+	// are made of, by name with package (qualified). starts are the ones
+	// an endpoint is declared with itself: guts starts from those.
+	found  map[string]*types.TypeName
+	starts map[string]bool
+	// text are types written as what their own JSON is, by the type's
+	// name with its package: one with a MarshalJSON, or a MarshalText.
+	text map[string]string
+	// prefix is what goes before the names of a package's types, by the
+	// package's path, where they'd otherwise be another's.
+	prefix map[string]string
+
+	wrong []problem
+}
+
+// problem is something of the plugin's that apigen can't write, and where
+// it is.
+type problem struct {
+	at   token.Position
+	text string
+}
+
+// rel is a place in the plugin's source, from the plugin's folder.
+func (g *generator) rel(pos token.Position) token.Position {
+	name := pos.Filename
+	if real, err := filepath.EvalSymlinks(name); err == nil {
+		name = real
+	}
+	if rel, err := filepath.Rel(g.dir, name); err == nil && !strings.HasPrefix(rel, "..") {
+		pos.Filename = rel
+	}
+	return pos
+}
+
+func (g *generator) bad(pos token.Position, format string, args ...any) {
+	pos = g.rel(pos)
+	at := ""
+	if pos.IsValid() {
+		at = pos.String() + ": "
+	}
+	g.wrong = append(g.wrong, problem{at: pos, text: at + fmt.Sprintf(format, args...)})
+}
+
+// endpoints finds the ones pkg declares: the calls of the framework's
+// functions.
+func (g *generator) endpoints(pkg *packages.Package) {
+	// declares is the framework's function an identifier names, if it's
+	// one that declares an endpoint.
+	declares := func(id *ast.Ident) *types.Func {
+		fn, ok := pkg.TypesInfo.Uses[id].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != kit || fn.Signature().Recv() != nil {
+			return nil
+		}
+		if _, ok := methods[fn.Name()]; !ok {
+			return nil
+		}
+		return fn
+	}
+	// queries is plugin.Query, if that's what an identifier names.
+	queries := func(id *ast.Ident) bool {
+		fn, ok := pkg.TypesInfo.Uses[id].(*types.Func)
+		return ok && fn.Pkg() != nil && fn.Pkg().Path() == kit && fn.Signature().Recv() == nil && fn.Name() == "Query"
+	}
+	called := map[*ast.Ident]bool{}
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id := callee(call)
+			if id == nil {
+				return true
+			}
+			fn := declares(id)
+			if fn == nil {
+				return true
+			}
+			called[id] = true
+			at := pkg.Fset.Position(call.Pos())
+			m := methods[fn.Name()]
+			if len(call.Args) < 2 {
+				return true
+			}
+			path := pkg.TypesInfo.Types[call.Args[1]].Value
+			if path == nil || path.Kind() != constant.String {
+				g.bad(at, "plugin.%s's path isn't a constant: apigen reads each endpoint where it's declared, so declare it with its path written out", fn.Name())
+				return true
+			}
+			e := Endpoint{Method: m.method, Path: constant.StringVal(path), At: at}
+			args := pkg.TypesInfo.Instances[id].TypeArgs
+			want := 1
+			if m.takes {
+				want = 2
+			}
+			if args == nil || args.Len() != want {
+				g.bad(at, "%s: apigen can't tell what types it's declared with", e)
+				return true
+			}
+			for i := range args.Len() {
+				if open(args.At(i)) {
+					g.bad(at, "%s is declared with a type of the function it's in (%s): apigen can't tell what that is, so declare each endpoint where its types are known", e, args.At(i))
+					return true
+				}
+			}
+			// plugin.Get(p, path, plugin.Query(fn)): the query it's asked
+			// with is what plugin.Query was called with.
+			if len(call.Args) >= 3 && !m.takes {
+				if with, ok := ast.Unparen(call.Args[2]).(*ast.CallExpr); ok {
+					if qid := callee(with); qid != nil && queries(qid) {
+						called[qid] = true
+						qargs := pkg.TypesInfo.Instances[qid].TypeArgs
+						if qargs == nil || qargs.Len() != 2 || open(qargs.At(0)) {
+							g.bad(at, "%s: apigen can't tell what type its query is", e)
+							return true
+						}
+						e.Query = qargs.At(0)
+					}
+				}
+			}
+			out := args.At(want - 1)
+			if !nothing(out) {
+				e.Out = out
+			}
+			if m.takes && !nothing(args.At(0)) {
+				e.In = args.At(0)
+			}
+			g.all = append(g.all, e)
+			return true
+		})
+	}
+	// One that's named and not called (handed on as a value) is declared
+	// somewhere apigen can't see.
+	for id := range pkg.TypesInfo.Uses {
+		if fn := declares(id); fn != nil && !called[id] {
+			g.bad(pkg.Fset.Position(id.Pos()), "plugin.%s is used here without being called: apigen reads each endpoint where it's declared, so call it with the endpoint's path and function", fn.Name())
+		}
+		if queries(id) && !called[id] {
+			g.bad(pkg.Fset.Position(id.Pos()), "plugin.Query is used here, and not as what plugin.Get or plugin.Delete is given: apigen reads an endpoint's query where the endpoint is declared, so write it there")
+		}
+	}
+}
+
+// callee is the name of what a call calls: Get, of plugin.Get(…) and of
+// plugin.Get[Issue](…), where the types are written out.
+func callee(call *ast.CallExpr) *ast.Ident {
+	fun := ast.Unparen(call.Fun)
+	switch f := fun.(type) {
+	case *ast.IndexExpr:
+		fun = f.X
+	case *ast.IndexListExpr:
+		fun = f.X
+	}
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f
+	case *ast.SelectorExpr:
+		return f.Sel
+	}
+	return nil
+}
+
+// query checks that an endpoint's query is one plugin.Query can fill: a
+// struct with a name, each field a plain value, or a list of them.
+func (g *generator) query(e Endpoint) {
+	named, ok := types.Unalias(e.Query).(*types.Named)
+	if !ok {
+		g.bad(e.At, "%s's query is a %s: a query is a struct with a name, with a field for each name it has", e, e.Query)
+		return
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		g.bad(g.at(named.Obj().Pos()), "%s is %s's query, and isn't a struct: a query is a struct, with a field for each name it has", named.Obj().Name(), e)
+		return
+	}
+	g.queryFields(named.Obj().Name(), st)
+}
+
+func (g *generator) queryFields(of string, st *types.Struct) {
+	for i := range st.NumFields() {
+		f := st.Field(i)
+		name, _, _ := strings.Cut(reflect.StructTag(st.Tag(i)).Get("json"), ",")
+		if name == "-" || !f.Exported() {
+			continue
+		}
+		t := types.Unalias(f.Type())
+		// An embedded struct's fields are the query's own.
+		if in, ok := t.Underlying().(*types.Struct); ok && f.Embedded() && name == "" && !g.reads(t) {
+			g.queryFields(of, in)
+			continue
+		}
+		if s, ok := t.(*types.Slice); ok {
+			t = types.Unalias(s.Elem())
+		}
+		if p, ok := t.(*types.Pointer); ok {
+			t = types.Unalias(p.Elem())
+		}
+		if _, plain := t.Underlying().(*types.Basic); !plain && !g.reads(t) {
+			g.bad(g.at(f.Pos()), "%s.%s is a %s: a query's field is a string, a number, a bool, a type that reads itself from text, a pointer to one, or a slice of them", of, f.Name(), types.TypeString(f.Type(), types.RelativeTo(f.Pkg())))
+		}
+	}
+}
+
+// reads says whether t is a type that reads itself from text
+// (time.Time): one value of a query, sent as a string.
+func (g *generator) reads(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok || !has(named, "UnmarshalText") {
+		return false
+	}
+	// guts writes it as a string where it writes itself as text too, or
+	// is one it knows (time.Time). Any other is said to be one here.
+	if q := qualified(named.Obj()); written[q] == "" && !has(named, "MarshalText") {
+		g.text[q] = "string"
+	}
+	return true
+}
+
+// open says whether t has a type parameter in it: a type that isn't
+// known where it's written.
+func open(t types.Type) bool {
+	switch t := types.Unalias(t).(type) {
+	case *types.TypeParam:
+		return true
+	case *types.Named:
+		for i := range t.TypeArgs().Len() {
+			if open(t.TypeArgs().At(i)) {
+				return true
+			}
+		}
+	case *types.Pointer:
+		return open(t.Elem())
+	case *types.Slice:
+		return open(t.Elem())
+	case *types.Array:
+		return open(t.Elem())
+	case *types.Map:
+		return open(t.Key()) || open(t.Elem())
+	}
+	return false
+}
+
+// nothing says whether t is struct{}: what an endpoint that takes or
+// answers nothing is declared with.
+func nothing(t types.Type) bool {
+	st, ok := types.Unalias(t).(*types.Struct)
+	return ok && st.NumFields() == 0
+}
+
+// qualified is a named type as guts knows it: its name after its
+// package's path.
+func qualified(obj *types.TypeName) string {
+	if obj.Pkg() == nil {
+		return obj.Name()
+	}
+	return obj.Pkg().Path() + "." + obj.Name()
+}
+
+// reach finds the types with names that t is made of, for an endpoint
+// that takes or answers it. direct is for the type the endpoint is
+// declared with, not one inside it.
+func (g *generator) reach(t types.Type, e Endpoint, direct bool) {
+	switch t := types.Unalias(t).(type) {
+	case *types.Named:
+		obj := t.Origin().Obj()
+		if obj.Pkg() == nil { // error, comparable
+			return
+		}
+		name := qualified(obj)
+		// What a type with types of its own is given (Page[Issue]) is
+		// declared with as much as the type is: nothing else names it.
+		for i := range t.TypeArgs().Len() {
+			g.reach(t.TypeArgs().At(i), e, direct)
+		}
+		if _, ok := written[name]; ok {
+			return
+		}
+		if _, ok := g.text[name]; ok {
+			return
+		}
+		if direct {
+			g.starts[name] = true
+		}
+		if g.found[name] != nil {
+			return
+		}
+		// A type that writes its own JSON is whatever it writes, which
+		// its fields don't say.
+		if has(t.Origin(), "MarshalJSON") {
+			g.text[name] = "unknown"
+			delete(g.starts, name)
+			return
+		}
+		if has(t.Origin(), "MarshalText") {
+			g.text[name] = "string"
+			delete(g.starts, name)
+			return
+		}
+		g.found[name] = obj
+		if !obj.Exported() {
+			g.bad(g.at(obj.Pos()), "%s isn't exported, and it's part of what %s takes or answers: export it (%s), so the app has it by name", obj.Name(), e, exported(obj.Name()))
+		}
+		g.reach(t.Origin().Underlying(), e, false)
+	case *types.Pointer:
+		g.reach(t.Elem(), e, direct)
+	case *types.Slice:
+		g.reach(t.Elem(), e, direct)
+	case *types.Array:
+		g.reach(t.Elem(), e, direct)
+	case *types.Map:
+		g.reach(t.Key(), e, false)
+		g.reach(t.Elem(), e, direct)
+	case *types.Struct:
+		if direct {
+			g.bad(e.At, "%s is declared with a struct that has no name: name it, so the app has a name for it too", e)
+			return
+		}
+		for i := range t.NumFields() {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(reflect.StructTag(t.Tag(i)).Get("json"), ",")
+			if name == "-" || (!f.Exported() && !f.Embedded()) {
+				continue
+			}
+			g.reach(f.Type(), e, false)
+		}
+	}
+}
+
+// exported is a name as it would be exported.
+func exported(name string) string { return strings.ToUpper(name[:1]) + name[1:] }
+
+// has says whether t, or a pointer to it, has a method of that name.
+func has(t *types.Named, method string) bool {
+	obj, _, _ := types.LookupFieldOrMethod(types.NewPointer(t), true, t.Obj().Pkg(), method)
+	_, ok := obj.(*types.Func)
+	return ok
+}
+
+func (g *generator) at(pos token.Pos) token.Position { return g.fset.Position(pos) }

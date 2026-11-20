@@ -7,13 +7,18 @@
 //	//go:embed agents.md migrations ui/dist
 //	var files embed.FS
 //
+//	// Hello is what the app is sent.
+//	type Hello struct {
+//		Greeting string `json:"greeting"`
+//	}
+//
 //	func main() {
 //		p := plugin.New(files)
 //		greeting := p.Config.String("greeting", "Greeting", plugin.Default("Hello"))
 //		p.UI("ui/dist")
 //		p.View("Hello", plugin.Icon("sparkle"))
-//		p.HandleFunc("GET /api/greeting", func(w http.ResponseWriter, r *http.Request) {
-//			json.NewEncoder(w).Encode(map[string]string{"greeting": greeting.Get()})
+//		plugin.Get(p, "/api/greeting", func(r *http.Request) (Hello, error) {
+//			return Hello{Greeting: greeting.Get()}, nil
 //		})
 //		p.Command("say", "Says the greeting", func(c *plugin.Call) error {
 //			return c.Say(greeting.Get() + ", workspace")
@@ -26,8 +31,10 @@
 //
 // A plugin's web UI is one client-side app (UI), which ws shows in a page
 // of its own, at each of the plugin's views (View). The plugin serves the
-// app's built files and what the app asks it (Handle). The framework
-// renders no pages, and a plugin has no HTML: the app talks to ws with
+// app's built files and what the app asks it: its endpoints (Get, Post),
+// each declared with the types it takes and answers, which `go tool
+// apigen` writes for the app in TypeScript. The framework renders no
+// pages, and a plugin has no HTML: the app talks to ws with
 // @withworkspace/ui-lib, the page's side of the frame protocol.
 package plugin
 

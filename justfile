@@ -13,6 +13,12 @@ check:
     go vet ./...
     cd examples/hello && go vet ./...
     go build ./...
+    cd examples/hello && go tool apigen -check
+
+# Write the example's ui/src/api.gen.ts again from its Go: what its
+# endpoints take and answer, for its app.
+api:
+    cd examples/hello && go tool apigen
 
 # Build the example's app into examples/hello/ui/dist, which is committed:
 # Go alone builds the plugin. It needs Node and npm.

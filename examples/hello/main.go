@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -30,6 +29,16 @@ func main() {
 	p.Run()
 }
 
+// What the app is sent is exported: `go tool apigen` writes it for the
+// app, with the endpoints that answer it (ui/src/api.gen.ts).
+
+// Hello is what the app shows: the greeting, and how often the app has
+// been seen.
+type Hello struct {
+	Greeting string `json:"greeting"`
+	Visits   int    `json:"visits"`
+}
+
 // setup declares the plugin. It's apart from main so a test can declare
 // the same plugin (see main_test.go).
 func setup(p *plugin.Plugin) {
@@ -49,18 +58,15 @@ func setup(p *plugin.Plugin) {
 	p.UI("ui/dist")
 	p.View("Hello", plugin.Icon("sparkle"))
 
-	// What the app asks: the greeting and the count, as JSON. The app
-	// fetches it at ws.api("/api/hello").
-	hello := func(w http.ResponseWriter, r *http.Request) {
+	// What the app asks: the greeting and the count. An endpoint says
+	// what it answers, the framework sends it as JSON, and an error is
+	// answered as its text. The app asks with what apigen wrote of it:
+	// plugin.get("/api/hello") there is a Hello.
+	hello := func(r *http.Request) (Hello, error) {
 		n, err := visits(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"greeting": greeting.Get(), "visits": n}) //nolint:errcheck // the app has gone
+		return Hello{Greeting: greeting.Get(), Visits: n}, err
 	}
-	p.HandleFunc("GET /api/hello", hello)
+	plugin.Get(p, "/api/hello", hello)
 
 	// VISIT-3 is the third look at the app. ws finds a name like it
 	// wherever it's written (a brief, a conversation). What one is made
@@ -96,10 +102,11 @@ func setup(p *plugin.Plugin) {
 	// told of the visit, so it's found there by what it says (Find, ws
 	// find) and drawn without the plugin being asked. A plugin with more
 	// to tell does it from its sync, all at once: visit.Mirror.
-	p.HandleFunc("POST /api/visits", func(w http.ResponseWriter, r *http.Request) {
+	// It's sent no body (struct{} is nothing), and answers as /api/hello
+	// does.
+	plugin.Post(p, "/api/visits", func(r *http.Request, _ struct{}) (Hello, error) {
 		if _, err := p.DB().ExecContext(r.Context(), `insert into visits values (unixepoch())`); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return Hello{}, err
 		}
 		if n, err := visits(r.Context()); err == nil {
 			err := visit.Put(r.Context(), visited(n, time.Now()))
@@ -107,7 +114,7 @@ func setup(p *plugin.Plugin) {
 				p.Log.Warn("telling ws of a visit: " + err.Error())
 			}
 		}
-		hello(w, r)
+		return hello(r)
 	})
 
 	// Something to do, from Find: it asks who to greet, and says it. An

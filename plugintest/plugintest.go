@@ -16,6 +16,7 @@
 package plugintest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -697,6 +698,22 @@ func (ws *WS) Get(path string) Response {
 func (ws *WS) Post(path string, form url.Values) Response {
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return ws.serve(r)
+}
+
+// Send asks the plugin's HTTP as its app does an endpoint (plugin.Get,
+// plugin.Post…): method and path, with body sent as JSON, or nothing sent
+// for a nil body.
+func (ws *WS) Send(method, path string, body any) Response {
+	if body == nil {
+		return ws.serve(httptest.NewRequest(method, path, nil))
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return Response{Status: http.StatusBadRequest, Header: http.Header{}, Body: "plugintest: the body isn't JSON: " + err.Error()}
+	}
+	r := httptest.NewRequest(method, path, bytes.NewReader(data))
+	r.Header.Set("Content-Type", "application/json")
 	return ws.serve(r)
 }
 
