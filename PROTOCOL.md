@@ -759,11 +759,16 @@ The things of that kind that live in the workspace's repos ([Remotes](#remotes))
   { "kind": "sketch", "name": "records/sketches/release-flow/",
     "repo": "records", "path": "sketches/release-flow/", "title": "Release flow",
     "main": "release-flow.excalidraw", "picture": "release-flow.svg",
-    "version": "3f9c2a1b…", "changed": "2026-11-20T10:42:00Z", "changed_by": "Dana" }
+    "version": "3f9c2a1b…", "changed": "2026-11-20T10:42:00Z", "changed_by": "Dana" },
+  { "kind": "sketch", "name": "records/sketches/cross-stack/architecture/",
+    "repo": "records", "repo_label": "Records", "path": "sketches/cross-stack/architecture/", "group": "cross-stack",
+    "title": "Architecture", "main": "architecture.excalidraw", "picture": "architecture.svg",
+    "version": "7a1e04c2…", "changed": "2026-11-20T11:05:00Z", "changed_by": "Sam" }
 ] }
 ```
 
 - `name` is its name in ws, and what it opens by in the plugin's app. `repo` and `path` are where it is: `path` is its folder, ending in `/`.
+- `repo_label` is what ws calls the repo, and `group` where the thing is among its kind's things there: the folders between the place the workspace puts the kind's things (`records:sketches/`) and the thing's own folder, with `/` between them (`cross-stack`, `plans/q4`). There's none for one straight in its place. They're how a plugin lists its things as they're organised in their repos, by repo and then by group: a plugin doesn't know where the workspace puts its kind's things, so it can't work a group out from `path`. For a thing in none of those places, `group` is the folders it's in from the repo's top.
 - `main` and `picture` are files in its folder, by name.
 - `version` is what its folder holds, as ws names it: the same while every file in it is, another when any of them changes (its main file, what's made from it, its `thing.toml`). It's ws's to make, and nothing to read: a plugin keeps it, to give back as an export's `base`, and can keep what it makes from a thing by it.
 - `changed` and `changed_by` are when it last changed in its repo and who by, where ws knows.

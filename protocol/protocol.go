@@ -975,6 +975,15 @@ type RemoteThing struct {
 	// Repo is the repo it's in, and Path its folder there, ending in /.
 	Repo string `json:"repo"`
 	Path string `json:"path"`
+	// RepoLabel is what ws calls the repo (Records), and Group where the
+	// thing is among its kind's things there: the folders between the
+	// place its kind's things go and its own folder (cross-stack,
+	// plans/q4), "" for one straight in the place. They're how a plugin
+	// lists its things as they're organised in their repos: by repo, then
+	// by group. For one that's in none of the places its kind's things
+	// go, Group is the folders it's in from the repo's top.
+	RepoLabel string `json:"repo_label,omitempty"`
+	Group     string `json:"group,omitempty"`
 	// Title is what its manifest calls it.
 	Title string `json:"title"`
 	// Main is its main file's name, and Picture its picture's, if it has
