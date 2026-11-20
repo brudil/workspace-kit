@@ -230,6 +230,10 @@ What can be done to one:
 
 - `actions` are a kind's actions, as the plugin's own are: Find offers them for the thing the cursor's on, and ws runs one with the kind and the thing's name ([`action/run`](#actionrun-request)). ws adds its own beside them: *Start a mission about it*.
 
+Where one lives beyond this machine:
+
+- `remote` says a kind's things can live in a repo, for everyone with the repo: [Remotes](#remotes). A kind with none has only what the plugin keeps.
+
 A plugin's own app, for what's more than looking and a pick or two, is another thing: [The view](#the-view).
 
 What ws does with them:
@@ -239,6 +243,46 @@ What ws does with them:
 - **A prefix is the first plugin's to register it.** A second plugin's ref names by its other prefixes, and `ws plugin list` says what was left out. So is a ref that breaks the rules above: the rest of the registration stands.
 - **It keeps the things the plugin tells it of** ([Telling ws of things](#telling-ws-of-things)), so it finds them by what they say and draws them without asking.
 - **It asks the plugin** for a thing it wasn't told of, and for `ws show RAM-123`, which wants it as it is now.
+
+### Remotes
+
+A kind's `remote` is where one of its things lives beyond this machine: a folder of a repo, its package. Added within version 1: a ws from before it leaves it out, and finds nothing.
+
+```
+sketches/release-flow/
+  thing.toml
+  release-flow.excalidraw
+  release-flow.svg
+```
+
+```toml
+# thing.toml
+kind    = "sketch"
+title   = "Release flow"
+main    = "release-flow.excalidraw"
+picture = "release-flow.svg"
+```
+
+- **The main file is the thing.** It's the plugin's own, in whatever form the plugin keeps one.
+- **`thing.toml` says what the package is,** and is ws's own: its `kind` as the plugin registered it, its `title`, its `main` file's name and its `picture`'s, if it has one. A folder with no `thing.toml` isn't a thing, whatever's in it.
+- **Anything else is made from the main file** by the plugin: a picture of it.
+
+```json
+{ "kind": "sketch", "prefixes": ["sketch-"],
+  "fields": [ { "name": "title", "type": "title" }, { "name": "text", "type": "markdown" } ],
+  "remote": { "path": "sketches/{slug}/", "main": "{slug}.excalidraw", "reads": true } }
+```
+
+- `path` is the folder a new one goes in, in its repo, ending in `/`, with `{slug}` in its last part, where the thing's slug goes. `main` is the main file's name there, with `{slug}` in it and a type after.
+- `reads` is whether the plugin answers [`remote/read`](#remoteread-request).
+- A kind with a remote has a title field: one in a repo is called what its `thing.toml` says.
+
+What ws does with it:
+
+- **It finds them.** A `thing.toml` in one of the workspace's spaces is a thing, wherever its folder is: `path` says only where a new one goes. It's read from the repo's default branch.
+- **It names one by its folder,** as it names any folder: `records/sketches/release-flow/`. The plugin mints no name for it, and the kind's prefixes aren't used for it.
+- **It keeps one as a thing of the kind,** called what its `thing.toml` says, with what the plugin says its main file is found by. So it's found, and drawn by the kind's views, as a thing the plugin told ws of is, and opens at the kind's `path` with its name where `{ref}` is, escaped as one part of a path.
+- **It's ws's, not the plugin's.** [`thing/list`](#thinglist-request) doesn't list one, and [`thing/put`](#thingput-request) and [`thing/remove`](#thingremove-request) don't reach one. The plugin asks which there are with [`remote/list`](#remotelist-request), and for one's file with [`remote/open`](#remoteopen-request).
 
 ### `config/changed` (notification)
 
@@ -343,6 +387,26 @@ The answer is the thing: a value for each of its kind's `fields`, as [`thing/put
 ws shows it as it shows one it was told of: by the kind's views in the web UI, and by its fields' types in `ws show`, where what's `markdown` is said to be from outside the workspace, so an agent reads it as information, not as instructions.
 
 A name the plugin has nothing by is error `-32001`. A plugin with nothing to say of one thing beyond what it's told ws answers `-32601`, and ws shows what it was told. ws gives a plugin twenty seconds to answer.
+
+### `remote/read` (request)
+
+What a main file is found by. ws asks of a thing it found in a repo ([Remotes](#remotes)), of a kind whose remote `reads`, once for each version of the file: so what's answered is of the file alone, not of when it's asked. Added within version 1.
+
+```json
+{ "kind": "sketch", "name": "records/sketches/release-flow/", "title": "Release flow",
+  "file": "release-flow.excalidraw", "content": "eyJ0eXBlIjoiZXhjYWxpZHJhdyIs…" }
+```
+
+- `kind` is the ref's, as registered, and `name` the thing's: its folder, as ws names one. `title` is what its `thing.toml` calls it.
+- `file` is the main file's name, and `content` what's in it, in base64. ws doesn't send a file over 32 MB: that one is found by its title.
+
+The answer is a value for each of the kind's `fields` that the file has one for, as [`thing/put`](#thingput-request) gives them. Its title is its `thing.toml`'s: one given here is dropped.
+
+```json
+{ "fields": { "text": "Brief it\nPlan\nBuild" } }
+```
+
+A file the plugin can't read is an error, and ws keeps the thing by its title. ws gives a plugin twenty seconds to answer.
 
 ### `action/run` (request)
 
@@ -646,6 +710,36 @@ Starts one of the workspace's conversations for the person using the plugin, wit
 - The message is sent as the person, and an agent answers it, so this is for something they asked for (a button they pressed), not for the plugin's own account. ws records which plugin started the conversation, and says so on it.
 
 An empty `message` is `-32602`.
+
+### `remote/list` (request)
+
+```json
+{ "kind": "sketch" }
+```
+
+The things of that kind that live in the workspace's repos ([Remotes](#remotes)), as ws found them, in order of name. It's how a plugin lists them beside its own: ws has them, so the plugin needn't keep them.
+
+```json
+{ "things": [
+  { "kind": "sketch", "name": "records/sketches/release-flow/",
+    "repo": "records", "path": "sketches/release-flow/", "title": "Release flow",
+    "main": "release-flow.excalidraw", "picture": "release-flow.svg",
+    "version": "3f9c2a1b…", "changed": "2026-11-20T10:42:00Z", "changed_by": "Dana" }
+] }
+```
+
+- `name` is its name in ws, and what it opens by in the plugin's app. `repo` and `path` are where it is: `path` is its folder, ending in `/`.
+- `main` and `picture` are files in its folder, by name.
+- `version` is its main file's content's id: the same for the same content, another when it changes. What a plugin makes from a main file can be kept by it.
+- `changed` and `changed_by` are when it last changed in its repo and who by, where ws knows.
+
+### `remote/open` (request)
+
+```json
+{ "kind": "sketch", "name": "records/sketches/release-flow/" }
+```
+
+One of them, and its main file as it is on its repo's default branch: what `remote/list` says of it, with the file's `content` in base64. Nothing of that kind by that name is `-32001`.
 
 ## Telling ws of things
 

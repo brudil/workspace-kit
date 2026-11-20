@@ -29,6 +29,7 @@ type Ref struct {
 	ref  protocol.Ref
 	show func(ctx context.Context, a Asked) (Thing, error)
 	acts map[string]func(*Act) error // what does each of its Actions
+	read func(ctx context.Context, f RemoteFile) (map[string]string, error)
 }
 
 // Asked is one thing ws asks about, by the name it was written as.
@@ -240,6 +241,120 @@ func (r *Ref) Action(id, title string, fn func(a *Act) error) *Ref {
 func (r *Ref) Show(fn func(ctx context.Context, a Asked) (Thing, error)) *Ref {
 	r.show = fn
 	return r
+}
+
+// Remote is where a kind's things live beyond this machine, as Ref.Remote
+// takes it: a folder of a repo each (its package), for everyone with the
+// repo. The folder holds the thing's own file (its main file), a
+// thing.toml that says what it is, and what the plugin makes from the
+// main file. ws finds the packages in the workspace's repos, names each
+// thing by its folder (records/sketches/release-flow/) and calls it what
+// its thing.toml says. The plugin mints no name for one and needn't keep
+// one: Remotes and OpenRemote ask ws.
+type Remote struct {
+	// Path is the folder a new one goes in, in its repo, with {slug}
+	// where the thing's slug goes: sketches/{slug}/. One that's there is
+	// found wherever its folder is.
+	Path string
+	// Main is the main file's name in that folder: {slug}.excalidraw.
+	Main string
+	// Read says what a main file is found by: a value for each of the
+	// kind's fields that the file has one for (the words on a sketch). Its
+	// title is its thing.toml's. ws asks once for each version of a file,
+	// so what's said is of the file alone. Without Read, one is found by
+	// its title.
+	Read func(ctx context.Context, f RemoteFile) (map[string]string, error)
+}
+
+// RemoteFile is a thing's main file, as ws read it from its repo.
+type RemoteFile struct {
+	// Name is the thing's name in ws: its folder.
+	Name string
+	// Title is what its thing.toml calls it.
+	Title string
+	// File is the main file's name, and Content what's in it.
+	File    string
+	Content []byte
+}
+
+// RemoteThing is one of a kind's things that lives in a repo, as ws
+// found it: its name, where it is, what it's called, its files' names,
+// and its main file's version.
+type RemoteThing = protocol.RemoteThing
+
+// Remote says this kind's things can live in a repo, and how: see Remote.
+// The kind needs a title field, which one in a repo has from its
+// thing.toml.
+//
+//	sketch = p.Ref("sketch", "Sketch").
+//		Prefix("sketch-").
+//		Fields(plugin.Title("title"), plugin.Markdown("text", "On it")).
+//		Remote(plugin.Remote{
+//			Path: "sketches/{slug}/",
+//			Main: "{slug}.excalidraw",
+//			Read: func(ctx context.Context, f plugin.RemoteFile) (map[string]string, error) {
+//				return map[string]string{"text": wordsOn(f.Content)}, nil
+//			},
+//		})
+func (r *Ref) Remote(remote Remote) *Ref {
+	r.ref.Remote = &protocol.Remote{Path: remote.Path, Main: remote.Main, Reads: remote.Read != nil}
+	r.read = remote.Read
+	return r
+}
+
+// Remotes are the kind's things that live in the workspace's repos, as ws
+// found them, in order of name. A ws from before remotes is
+// ErrUnsupported.
+func (r *Ref) Remotes(ctx context.Context) ([]RemoteThing, error) {
+	var out protocol.RemoteListResult
+	if err := r.p.ask(ctx, protocol.MethodRemoteList, protocol.RemoteListParams{Kind: r.ref.Kind}, &out); err != nil {
+		return nil, err
+	}
+	return out.Things, nil
+}
+
+// OpenRemote is one of the kind's things that lives in a repo, by its
+// name, and its main file as it is on its repo's default branch. One ws
+// has nothing by that name for is ErrNotFound.
+func (r *Ref) OpenRemote(ctx context.Context, name string) (RemoteThing, []byte, error) {
+	var out protocol.RemoteOpened
+	if err := r.p.ask(ctx, protocol.MethodRemoteOpen, protocol.RemoteOpenParams{Kind: r.ref.Kind, Name: name}, &out); err != nil {
+		return RemoteThing{}, nil, err
+	}
+	return out.RemoteThing, out.Content, nil
+}
+
+// readRemote answers ws asking what a main file is found by.
+func (p *Plugin) readRemote(ctx context.Context, in protocol.RemoteReadParams) (any, error) {
+	var ref *Ref
+	for _, r := range p.refs {
+		if r.ref.Kind == in.Kind {
+			ref = r
+		}
+	}
+	if ref == nil {
+		return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: fmt.Sprintf("this plugin has no ref called %q", in.Kind)}
+	}
+	if ref.read == nil {
+		return nil, rpc.MethodNotFound(protocol.MethodRemoteRead)
+	}
+	if p.broken != nil {
+		return nil, p.broken
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.CommandTimeout)
+	defer cancel()
+	var fields map[string]string
+	err := p.recovering("reading "+in.Name, func() (err error) {
+		fields, err = ref.read(ctx, RemoteFile{Name: in.Name, Title: in.Title, File: in.File, Content: in.Content})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	return protocol.RemoteReadResult{Fields: fields}, nil
 }
 
 // refsDeclared are the refs as ws is told them, and what's wrong with

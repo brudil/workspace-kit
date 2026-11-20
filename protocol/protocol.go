@@ -281,7 +281,47 @@ type Ref struct {
 	// Actions are what can be done to one of its things: offered in Find
 	// for the thing the cursor's on, and run with its name.
 	Actions []Action `json:"actions,omitempty"`
+	// Remote is where one lives beyond this machine, for a kind whose
+	// things can: a folder of a repo, for everyone with the repo. An
+	// addition to version 1: a ws from before it leaves it out.
+	Remote *Remote `json:"remote,omitempty"`
 }
+
+// Remote is where a kind's things live beyond this machine: a folder of
+// a repo each (its package), which holds the thing's own file (its main
+// file), a ManifestName that says what it is, and what the plugin makes
+// from the main file (a picture of it). ws finds a package in one of the
+// workspace's spaces by its manifest, names the thing by the folder as it
+// names any folder (records/sketches/release-flow/), calls it what the
+// manifest says, and asks the plugin what its main file is found by
+// (MethodRemoteRead). The plugin mints no name for one, and needn't keep
+// one: ws has them, and says which (MethodRemoteList, MethodRemoteOpen).
+type Remote struct {
+	// Path is the folder a new one goes in, in its repo, with RemoteSlug
+	// where the thing's slug goes: sketches/{slug}/. One that's there is
+	// found wherever its folder is.
+	Path string `json:"path"`
+	// Main is the main file's name in that folder, with RemoteSlug where
+	// the thing's slug goes: {slug}.excalidraw.
+	Main string `json:"main"`
+	// Reads is whether the plugin says what a main file is found by
+	// (MethodRemoteRead). Without it, one is found by its title alone.
+	Reads bool `json:"reads,omitempty"`
+}
+
+// ManifestName is the file in a package that says what it is, in TOML:
+// its kind (as the plugin registered it), its title, its main file's name
+// and its picture's, if it has one. It's ws's own file: ws reads it, and
+// writes it.
+//
+//	kind    = "sketch"
+//	title   = "Release flow"
+//	main    = "release-flow.excalidraw"
+//	picture = "release-flow.svg"
+const ManifestName = "thing.toml"
+
+// RemoteSlug is where a thing's slug goes in a Remote's Path and Main.
+const RemoteSlug = "{slug}"
 
 // Field is one of the things a kind's things are made of: its name, in
 // lower-case letters, digits and underscores, what it is, and what it's
@@ -481,7 +521,36 @@ func (r Ref) Problem() string {
 			}
 		}
 	}
+	if r.Remote != nil {
+		if problem := r.Remote.Problem(); problem != "" {
+			return problem
+		}
+		if titles != 1 {
+			return "it has a remote and no title field: one in a repo is called what its " + ManifestName + " says"
+		}
+	}
 	return ActionsProblem(r.Actions)
+}
+
+var (
+	remotePath = regexp.MustCompile(`^([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]*\{slug\}[A-Za-z0-9._-]*/$`)
+	remoteMain = regexp.MustCompile(`^[A-Za-z0-9._-]*\{slug\}[A-Za-z0-9._-]*\.[A-Za-z0-9]+$`)
+)
+
+// Problem says what's wrong with a remote as it's registered, or "".
+func (r Remote) Problem() string {
+	switch {
+	case !remotePath.MatchString(r.Path) || strings.Contains(r.Path, ".."):
+		return fmt.Sprintf("its remote's path %q must be a folder in a repo, ending in /, with %s in its last part (sketches/%s/)", r.Path, RemoteSlug, RemoteSlug)
+	case !remoteMain.MatchString(r.Main) || strings.Contains(r.Main, ".."):
+		return fmt.Sprintf("its remote's main file %q must be a file's name with %s in it and a type after (%s.excalidraw)", r.Main, RemoteSlug, RemoteSlug)
+	}
+	// A main file that some slug would name as the manifest is.
+	before, after, _ := strings.Cut(strings.ToLower(r.Main), RemoteSlug)
+	if len(before)+len(after) < len(ManifestName) && strings.HasPrefix(ManifestName, before) && strings.HasSuffix(ManifestName, after) {
+		return fmt.Sprintf("its remote's main file %q could be %s, ws's own file in the folder", r.Main, ManifestName)
+	}
+	return ""
 }
 
 // Action is something a plugin can do when it's asked from Find: its id,
@@ -824,6 +893,93 @@ type ThingListParams struct {
 // ThingListResult is their names, in order.
 type ThingListResult struct {
 	Refs []string `json:"refs"`
+}
+
+// A kind's things that live in a repo (Remote). ws finds them, so it asks
+// the plugin what one's file is found by (a request to the plugin), and
+// the plugin asks ws which there are and for one's file (requests to ws).
+// Each is an addition to version 1.
+const (
+	// MethodRemoteRead is ws asking what a main file is found by:
+	// RemoteReadParams → RemoteReadResult. Asked once for each version of
+	// a file, of a kind whose Remote Reads.
+	MethodRemoteRead = "remote/read"
+	// MethodRemoteList is a plugin asking which things of a kind are in
+	// the workspace's repos: RemoteListParams → RemoteListResult.
+	MethodRemoteList = "remote/list"
+	// MethodRemoteOpen is a plugin asking for one's main file:
+	// RemoteOpenParams → RemoteOpened.
+	MethodRemoteOpen = "remote/open"
+)
+
+// RemoteReadMax is the most of a main file ws sends to be read: one
+// that's larger is found by its title alone.
+const RemoteReadMax = 32 << 20
+
+// RemoteReadParams is a main file to read: the thing's kind and name (its
+// folder, as ws names one), what its manifest calls it, and the file.
+type RemoteReadParams struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Title string `json:"title,omitempty"`
+	// File is the main file's name, and Content what's in it.
+	File    string `json:"file"`
+	Content []byte `json:"content"`
+}
+
+// RemoteReadResult is what the file says: a value for each of the kind's
+// fields that it has one for, as a Thing has them. Its title is its
+// manifest's: one given here is dropped.
+type RemoteReadResult struct {
+	Fields map[string]string `json:"fields"`
+}
+
+// RemoteListParams asks which things of a kind are in the workspace's
+// repos.
+type RemoteListParams struct {
+	Kind string `json:"kind"`
+}
+
+// RemoteListResult is those things, in order of name.
+type RemoteListResult struct {
+	Things []RemoteThing `json:"things"`
+}
+
+// RemoteThing is a thing that lives in a repo, as ws found it.
+type RemoteThing struct {
+	Kind string `json:"kind"`
+	// Name is its name: its folder, as ws names one
+	// (records/sketches/release-flow/).
+	Name string `json:"name"`
+	// Repo is the repo it's in, and Path its folder there, ending in /.
+	Repo string `json:"repo"`
+	Path string `json:"path"`
+	// Title is what its manifest calls it.
+	Title string `json:"title"`
+	// Main is its main file's name, and Picture its picture's, if it has
+	// one: both in its folder.
+	Main    string `json:"main"`
+	Picture string `json:"picture,omitempty"`
+	// Version is its main file's content's id: the same for the same
+	// content, and another when it changes.
+	Version string `json:"version"`
+	// Changed is when it last changed in its repo, and ChangedBy who by,
+	// where ws knows.
+	Changed   time.Time `json:"changed,omitzero"`
+	ChangedBy string    `json:"changed_by,omitempty"`
+}
+
+// RemoteOpenParams asks for one thing's main file, by its kind and name.
+type RemoteOpenParams struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+// RemoteOpened is the thing, and its main file as it is on its repo's
+// default branch. One ws has nothing by that name for is CodeNotFound.
+type RemoteOpened struct {
+	RemoteThing
+	Content []byte `json:"content"`
 }
 
 // CodeNotFound is the answer for something asked for by name that isn't

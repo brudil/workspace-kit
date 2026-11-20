@@ -406,6 +406,47 @@ func (ws *WS) Repos(repos ...protocol.Repo) {
 	})
 }
 
+// Remotes are the things the stand-in has found in its repos: what it
+// answers Ref.Remotes and Ref.OpenRemote with. Each is a thing as ws
+// found it, and its main file.
+func (ws *WS) Remotes(remotes ...protocol.RemoteOpened) {
+	ws.Answer(protocol.MethodRemoteList, func(params json.RawMessage) (any, error) {
+		var in protocol.RemoteListParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		out := protocol.RemoteListResult{Things: []protocol.RemoteThing{}}
+		for _, r := range remotes {
+			if r.Kind == in.Kind {
+				out.Things = append(out.Things, r.RemoteThing)
+			}
+		}
+		slices.SortFunc(out.Things, func(a, b protocol.RemoteThing) int { return strings.Compare(a.Name, b.Name) })
+		return out, nil
+	})
+	ws.Answer(protocol.MethodRemoteOpen, func(params json.RawMessage) (any, error) {
+		var in protocol.RemoteOpenParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, &rpc.Error{Code: protocol.CodeInvalidParams, Message: err.Error()}
+		}
+		for _, r := range remotes {
+			if r.Kind == in.Kind && r.Name == in.Name {
+				return r, nil
+			}
+		}
+		return nil, &rpc.Error{Code: protocol.CodeNotFound, Message: "ws has no " + in.Kind + " at " + in.Name}
+	})
+}
+
+// Read asks the plugin what a main file is found by, as ws does of one it
+// finds in a repo: kind is the Ref's, name the thing's (its folder), and
+// title what its thing.toml calls it.
+func (ws *WS) Read(kind, name, title, file string, content []byte) (map[string]string, error) {
+	var out protocol.RemoteReadResult
+	err := ws.conn.Call(context.Background(), protocol.MethodRemoteRead, protocol.RemoteReadParams{Kind: kind, Name: name, Title: title, File: file, Content: content}, &out)
+	return out.Fields, err
+}
+
 // keepThings answers what the plugin tells ws of its things, as ws does:
 // a thing is kept when its kind is one the plugin registered, its name
 // one of that kind's, and it has something for its kind's title.

@@ -1663,3 +1663,76 @@ func TestAFieldNamesOtherThings(t *testing.T) {
 		t.Errorf("fields: %s", got)
 	}
 }
+
+// A kind whose things can live in a repo says so, and how. ws finds
+// those, so the plugin answers what one's file is found by, and asks ws
+// which there are and for one's file.
+func TestAKindsThingsLiveInARepo(t *testing.T) {
+	var sketch *plugin.Ref
+	ws := plugintest.New(t, nil, func(p *plugin.Plugin) {
+		sketch = p.Ref("sketch", "Sketch").
+			Prefix("sketch-").
+			Fields(plugin.Title("title"), plugin.Markdown("text", "On it")).
+			Remote(plugin.Remote{
+				Path: "sketches/{slug}/",
+				Main: "{slug}.excalidraw",
+				Read: func(_ context.Context, f plugin.RemoteFile) (map[string]string, error) {
+					if len(f.Content) == 0 {
+						return nil, errors.New(f.File + " is empty")
+					}
+					return map[string]string{"text": f.Title + ": " + string(f.Content)}, nil
+				},
+			})
+		p.Ref("note", "Note").Prefix("note-").Fields(plugin.Title("title")).Remote(plugin.Remote{Path: "notes/{slug}/", Main: "{slug}.txt"})
+	})
+	ctx := context.Background()
+
+	// What ws is told: where one goes, and that the plugin reads one.
+	reg := ws.Registration()
+	if r := reg.Refs[0].Remote; r == nil || *r != (protocol.Remote{Path: "sketches/{slug}/", Main: "{slug}.excalidraw", Reads: true}) {
+		t.Errorf("the sketch's remote, as registered: %+v", r)
+	}
+	if r := reg.Refs[1].Remote; r == nil || r.Reads {
+		t.Errorf("the note's remote, as registered: %+v", r)
+	}
+
+	// ws asks what a file is found by.
+	fields, err := ws.Read("sketch", "records/sketches/release-flow/", "Release flow", "release-flow.excalidraw", []byte("boxes"))
+	if err != nil || fmt.Sprint(fields) != fmt.Sprint(map[string]string{"text": "Release flow: boxes"}) {
+		t.Errorf("read: %v, %v", fields, err)
+	}
+	if _, err := ws.Read("sketch", "records/sketches/empty/", "Empty", "empty.excalidraw", nil); err == nil || !strings.Contains(err.Error(), "empty.excalidraw is empty") {
+		t.Errorf("a file it can't read: %v", err)
+	}
+	// A kind that doesn't read is found by its title: there's nothing to ask.
+	if _, err := ws.Read("note", "records/notes/a/", "A", "a.txt", []byte("x")); err == nil || !strings.Contains(err.Error(), protocol.MethodRemoteRead) {
+		t.Errorf("a kind that doesn't read: %v", err)
+	}
+	if _, err := ws.Read("issue", "records/issues/a/", "A", "a.txt", []byte("x")); err == nil {
+		t.Error("a kind it hasn't was read")
+	}
+
+	// A ws from before remotes says so.
+	if _, err := sketch.Remotes(ctx); !errors.Is(err, plugin.ErrUnsupported) {
+		t.Errorf("a ws from before remotes: %v", err)
+	}
+
+	// The plugin asks ws which there are, and for one's file.
+	flow := protocol.RemoteOpened{
+		RemoteThing: protocol.RemoteThing{Kind: "sketch", Name: "records/sketches/release-flow/", Repo: "records", Path: "sketches/release-flow/", Title: "Release flow", Main: "release-flow.excalidraw", Picture: "release-flow.svg", Version: "3f9c2a"},
+		Content:     []byte("boxes"),
+	}
+	arch := protocol.RemoteOpened{RemoteThing: protocol.RemoteThing{Kind: "sketch", Name: "records/sketches/arch/", Repo: "records", Path: "sketches/arch/", Title: "Architecture", Main: "arch.excalidraw", Version: "77aa01"}}
+	ws.Remotes(flow, arch, protocol.RemoteOpened{RemoteThing: protocol.RemoteThing{Kind: "note", Name: "records/notes/a/", Title: "A"}})
+	things, err := sketch.Remotes(ctx)
+	if err != nil || len(things) != 2 || things[0].Name != arch.Name || things[1] != flow.RemoteThing {
+		t.Errorf("the sketches in repos: %+v, %v", things, err)
+	}
+	thing, content, err := sketch.OpenRemote(ctx, flow.Name)
+	if err != nil || thing != flow.RemoteThing || string(content) != "boxes" {
+		t.Errorf("opened: %+v %q, %v", thing, content, err)
+	}
+	if _, _, err := sketch.OpenRemote(ctx, "records/sketches/gone/"); !errors.Is(err, plugin.ErrNotFound) {
+		t.Errorf("one that isn't there: %v", err)
+	}
+}
