@@ -24,6 +24,8 @@ type Command struct {
 	timeout *time.Duration
 	// conversations is a command a conversation's agent may run.
 	conversations bool
+	// label is what it's doing, as a conversation shows it.
+	label string
 }
 
 // flag is a flag a command takes: on or off, or (takesValue) with a value.
@@ -81,6 +83,17 @@ func (c *Command) Args(usage string) *Command {
 // (p.Proposes).
 func (c *Command) Conversations() *Command {
 	c.conversations = true
+	return c
+}
+
+// Label is what the command is doing, as a conversation shows an
+// agent's step that ran it, in place of the command as it was typed:
+// "Pulling up {1}", where {1} is its first argument, {2} its second, and
+// so on. Words for someone watching, not a description of the command:
+// "Pulling up sketch-5" for ws sketch show sketch-5 -f llm. A step whose
+// command is missing an argument the label names shows the command.
+func (c *Command) Label(label string) *Command {
+	c.label = label
 	return c
 }
 
