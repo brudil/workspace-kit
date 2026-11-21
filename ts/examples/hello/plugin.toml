@@ -1,0 +1,3 @@
+name    = "hello-ts"
+version = "0.1.0"
+command = ["node", "main.ts"]

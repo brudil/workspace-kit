@@ -1,0 +1,25 @@
+{
+  "name": "@withworkspace/plugin",
+  "version": "0.0.0",
+  "description": "The framework for writing a ws plugin in TypeScript, on Node or Bun",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/withworkspace/plugin.git", "directory": "ts" },
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./protocol": { "types": "./dist/protocol.gen.d.ts", "default": "./dist/protocol.gen.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2"
+  }
+}
