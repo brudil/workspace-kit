@@ -1,0 +1,60 @@
+name: Release (npm)
+
+# The kits share their versions: a v* tag is the Go module's release, and
+# stages @withworkspace/plugin from ts/ on npm as the same version (v0.13.0
+# is 0.13.0), by trusted publishing: npm trusts this workflow in this repo,
+# and no token is stored anywhere. A staged version isn't public until a
+# maintainer approves it, with `npm stage approve <stage-id>` and their
+# 2FA. A pull request that changes this file runs everything but the
+# staging, to try it.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release-npm.yml"]
+
+permissions:
+  contents: read
+  id-token: write          # trusted publishing: npm takes the run's OIDC token
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest  # trusted publishing needs GitHub's own runners
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@^11.15.0   # npm stage needs 11.15.0 or later
+
+      - run: npm ci
+
+      # The version is the tag's. The repo holds 0.0.0 in package.json, and
+      # the tag's is written in here. A try is given a version that's never
+      # published: npm checks a dry run against what's there too.
+      - name: Take the version from the tag
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
+            *)            version="0.0.0-try" ;;
+          esac
+          npm version "$version" --no-git-tag-version
+
+      - run: npm test
+
+      - run: npm run build
+
+      # It prints the stage's id, which `npm stage approve` takes.
+      - name: Publish
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*-*) npm stage publish --tag next ;;    # v0.2.0-rc.1: a prerelease, not latest
+            refs/tags/*)   npm stage publish ;;
+            *)             npm stage publish --dry-run --tag try ;;
+          esac

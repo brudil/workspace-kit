@@ -30,8 +30,15 @@ ui-check: ui
     git diff --exit-code -- examples/hello/ui/dist
 
 # Bring the protocol's types here from github.com/withworkspace/protocol, as
-# generated from its spec at ref (a tag, plugin/v1.2.0, or a branch): the
-# protocol package is that file and its own rules.go.
+# generated from its spec at ref (a tag, plugin/v1.2.0, or a branch), for
+# both kits: Go's protocol package is its file and its own rules.go, and the
+# TypeScript kit's is ts/src/protocol.gen.ts.
 protocol ref="main":
     gh api "repos/withworkspace/protocol/contents/plugin/gen/go/protocol.gen.go?ref={{ref}}" -H "Accept: application/vnd.github.raw" > protocol/protocol.gen.go
+    gh api "repos/withworkspace/protocol/contents/plugin/gen/ts/protocol.gen.ts?ref={{ref}}" -H "Accept: application/vnd.github.raw" > ts/src/protocol.gen.ts
     go build ./... && go test ./protocol
+    cd ts && npm run typecheck && npm test
+
+# The TypeScript kit (ts/): typechecked, tested, built.
+ts:
+    cd ts && npm ci && npm run typecheck && npm test && npm run build

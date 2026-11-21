@@ -1,6 +1,6 @@
 # plugin
 
-The framework for writing ws plugins in Go: `github.com/withworkspace/plugin`.
+The framework for writing ws plugins in Go: `github.com/withworkspace/plugin`. And in TypeScript, on Node or Bun: [`@withworkspace/plugin`](ts), in `ts/`. The two share their versions (one `v*` tag releases both) and their protocol's types, which are generated for each from one spec in [withworkspace/protocol](https://github.com/withworkspace/protocol).
 
 This repo is the framework, not a plugin. Plugins are the repos beside it named `plugin-<name>`.
 
