@@ -2,7 +2,7 @@
   "name": "@withworkspace/plugin",
   "version": "0.0.0",
   "description": "The framework for writing a ws plugin in TypeScript, on Node or Bun",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/withworkspace/plugin.git", "directory": "ts" },
   "type": "module",
   "engines": { "node": ">=22.18" },
