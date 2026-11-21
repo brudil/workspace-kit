@@ -1,6 +1,6 @@
 # The plugin protocol
 
-How ws and a plugin talk. Version 1. The types for everything here are in [`protocol`](protocol/protocol.go) (`github.com/withworkspace/plugin/protocol`). The framework in this repo (`plugin`) speaks it for you; this is for ws's side, for a plugin in another language, and for settling an argument.
+How ws and a plugin talk. Version 1. The types for everything here are written in TypeSpec in [`withworkspace/protocol`](https://github.com/withworkspace/protocol/tree/main/plugin/spec), from which each language's are generated; Go's are [`protocol`](protocol/protocol.gen.go) (`github.com/withworkspace/plugin/protocol`). The framework in this repo (`plugin`) speaks it for you; this is for ws's side, for a plugin in another language, and for settling an argument.
 
 This is what's built: where ws and this differ, one of them has a bug.
 
